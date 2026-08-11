@@ -21,6 +21,7 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
 
     const fitAddonRef = useRef<FitAddon | null>(null);
 
+    const focusedRef = useRef(false);
 
     useImperativeHandle(ref, () => ({
         writeOut(
@@ -34,7 +35,6 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                     ? stdOut
                     : stdOut + "\r\n";
 
-
             if (color) {
                 terminalRef.current.write(
                     `\x1b[${color}m${output}\x1b[0m`,
@@ -43,12 +43,8 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                 return;
             }
 
-
-            terminalRef.current.write(
-                output,
-            );
+            terminalRef.current.write(output);
         },
-
 
         writeErr(
             stdErr: string,
@@ -60,17 +56,14 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                     ? stdErr
                     : stdErr + "\r\n";
 
-
             terminalRef.current.write(
                 `\x1b[31m${output}\x1b[0m`,
             );
         },
 
-
         clear() {
             terminalRef.current?.clear();
         },
-
 
         async writeIn(
             placeholder = "",
@@ -79,44 +72,30 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                 return "";
             }
 
-
             const terminal =
                 terminalRef.current;
-
 
             terminal.write(
                 placeholder,
             );
 
-
             return await new Promise<string>(
                 (resolve) => {
-
                     let input = "";
 
                     let cursor = 0;
 
-
                     const redraw = () => {
-
-                        terminal.write(
-                            "\r",
-                        );
-
+                        terminal.write("\r");
 
                         terminal.write(
                             placeholder + input,
                         );
 
-
-                        terminal.write(
-                            "\x1b[K",
-                        );
-
+                        terminal.write("\x1b[K");
 
                         const moveLeft =
                             input.length - cursor;
-
 
                         if (moveLeft > 0) {
                             terminal.write(
@@ -125,13 +104,17 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                         }
                     };
 
-
                     const disposable =
                         terminal.onData(
                             (data) => {
 
-                                switch (data) {
+                                // Ignore key presses until
+                                // the user clicks inside the terminal.
+                                if (!focusedRef.current) {
+                                    return;
+                                }
 
+                                switch (data) {
 
                                     case "\r":
 
@@ -141,20 +124,15 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
 
                                         disposable.dispose();
 
-                                        resolve(
-                                            input,
-                                        );
+                                        resolve(input);
 
                                         return;
-
-
 
                                     case "\x7f":
 
                                         if (cursor === 0) {
                                             return;
                                         }
-
 
                                         input =
                                             input.slice(
@@ -165,14 +143,11 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                                                 cursor,
                                             );
 
-
                                         cursor--;
 
                                         redraw();
 
                                         return;
-
-
 
                                     case "\x1b[D":
 
@@ -186,8 +161,6 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                                         }
 
                                         return;
-
-
 
                                     case "\x1b[C":
 
@@ -205,8 +178,6 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
 
                                         return;
 
-
-
                                     default:
 
                                         if (
@@ -215,7 +186,6 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                                         ) {
                                             return;
                                         }
-
 
                                         input =
                                             input.slice(
@@ -227,11 +197,9 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                                                 cursor,
                                             );
 
-
                                         cursor++;
 
                                         redraw();
-
                                 }
                             },
                         );
@@ -240,13 +208,11 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
         },
     }));
 
-
     useEffect(() => {
 
         if (!containerRef.current) {
             return;
         }
-
 
         const terminal =
             new XTerm({
@@ -259,24 +225,33 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                 },
             });
 
-
         const fitAddon =
             new FitAddon();
-
 
         terminal.loadAddon(
             fitAddon,
         );
 
-
         terminal.open(
             containerRef.current,
         );
 
-
         fitAddon.fit();
 
+        // Track whether the terminal currently has focus.
+        containerRef.current.addEventListener(
+            "focusin",
+            () => {
+                focusedRef.current = true;
+            },
+        );
 
+        containerRef.current.addEventListener(
+            "focusout",
+            () => {
+                focusedRef.current = false;
+            },
+        );
 
         terminal.attachCustomKeyEventHandler(
             (event) => {
@@ -291,45 +266,34 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                     const selection =
                         terminal.getSelection();
 
-
                     if (selection.length > 0) {
 
                         navigator.clipboard.writeText(
                             selection,
                         );
 
-
                         return false;
                     }
                 }
-
 
                 return true;
             },
         );
 
-
-
         terminalRef.current =
             terminal;
 
-
         fitAddonRef.current =
             fitAddon;
-
-
 
         const resizeObserver =
             new ResizeObserver(() => {
                 fitAddon.fit();
             });
 
-
         resizeObserver.observe(
             containerRef.current,
         );
-
-
 
         return () => {
 
@@ -337,19 +301,14 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
 
             terminal.dispose();
 
-
             terminalRef.current =
                 null;
-
 
             fitAddonRef.current =
                 null;
         };
 
-
     }, []);
-
-
 
     return (
         <div
@@ -359,9 +318,7 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
     );
 });
 
-
 XtermTerminal.displayName =
     "XtermTerminal";
-
 
 export default XtermTerminal;

@@ -1,302 +1,378 @@
 import runtime from "@/lib/runtime/RunTime";
 
-declare global {
-    interface Window {
-        loadPyodide?: (options: {
-            indexURL: string;
-        }) => Promise<any>;
-    }
-}
 
-let pyodide: any = null;
-
-let pyodideScriptPromise: Promise<void> | null = null;
+let pythonWorker: Worker | null = null;
 
 
-async function loadPyodideScript(): Promise<void> {
-    if (window.loadPyodide) {
-        return;
-    }
 
-    if (pyodideScriptPromise) {
-        return pyodideScriptPromise;
-    }
+/* ============================================================================
+ * Create Python Worker
+ * ========================================================================== */
 
-    pyodideScriptPromise = new Promise(
-        (resolve, reject) => {
-            const script =
-                document.createElement("script");
+function createPythonWorker(): Worker {
 
-            script.src = "/pyodide/pyodide.js";
 
-            script.onload = () => resolve();
+    const worker = new Worker(
 
-            script.onerror = () =>
-                reject(
-                    new Error(
-                        "Failed to load local Pyodide script.",
-                    ),
+        new URL(
+
+            "./python.worker.ts",
+
+            import.meta.url,
+
+        ),
+
+        {
+            type: "module",
+        },
+
+    );
+
+
+
+    worker.onmessage = (
+
+        event: MessageEvent,
+
+    ) => {
+
+
+        const data =
+            event.data;
+
+
+        if (!data) {
+            return;
+        }
+
+
+
+        switch (data.type) {
+
+
+            /* ================================================================
+             * Worker ready
+             * ============================================================= */
+
+            case "ready":
+
+
+                runtime.writeOut(
+
+                    "[System] Done",
+
+                    "90",
+
                 );
 
-            document.head.appendChild(script);
-        },
-    );
 
-    return pyodideScriptPromise;
+                break;
+
+
+
+            /* ================================================================
+             * stdout
+             * ============================================================= */
+
+            case "writeOut":
+
+
+                runtime.writeOut(
+
+                    data.text,
+
+                    data.color,
+
+                );
+
+
+                break;
+
+
+
+            /* ================================================================
+             * stderr
+             * ============================================================= */
+
+            case "writeErr":
+
+
+                runtime.writeErr(
+
+                    data.text,
+
+                );
+
+
+                break;
+
+
+
+            /* ================================================================
+             * stdin
+             * ============================================================= */
+
+            case "stdin-request":
+
+
+                handleInputRequest(
+
+                    data.requestId,
+
+                    data.prompt ?? "",
+
+                );
+
+
+                break;
+
+
+
+            /* ================================================================
+             * Finished
+             * ============================================================= */
+
+            case "done":
+
+
+                runtime.writeOut(
+
+                    "[System] Program Finished",
+
+                    "90",
+
+                );
+
+
+                break;
+
+
+
+            /* ================================================================
+             * Error
+             * ============================================================= */
+
+            case "error":
+
+
+                runtime.writeErr(
+
+                    "[Runtime Error]",
+
+                );
+
+
+                runtime.writeErr(
+
+                    data.message ??
+                    "Unknown error",
+
+                );
+
+
+                runtime.writeErr(
+
+                    "[System] Program Failed",
+
+                );
+
+
+                break;
+
+
+        }
+
+
+    };
+
+
+    return worker;
+
 }
 
 
-const pythonTransformer = `
-import ast
+
+/* ============================================================================
+ * Get Worker
+ * ========================================================================== */
+
+function getPythonWorker(): Worker {
 
 
-class RuntimeTransformer(ast.NodeTransformer):
+    if (!pythonWorker) {
 
-    def visit_Call(self, node):
-        self.generic_visit(node)
+        pythonWorker =
+            createPythonWorker();
 
-        if isinstance(node.func, ast.Name):
-
-            # -----------------------------
-            # print()
-            # -----------------------------
-
-            if node.func.id == "print":
-
-                values = ast.List(
-                    elts=node.args,
-                    ctx=ast.Load()
-                )
-
-                replacement = ast.Call(
-                    func=ast.Attribute(
-                        value=ast.Name(
-                            id="runtime",
-                            ctx=ast.Load()
-                        ),
-                        attr="writeOut",
-                        ctx=ast.Load()
-                    ),
-                    args=[
-                        ast.Call(
-                            func=ast.Attribute(
-                                value=ast.Constant(
-                                    value=" "
-                                ),
-                                attr="join",
-                                ctx=ast.Load()
-                            ),
-                            args=[
-                                ast.GeneratorExp(
-                                    elt=ast.Call(
-                                        func=ast.Name(
-                                            id="str",
-                                            ctx=ast.Load()
-                                        ),
-                                        args=[
-                                            ast.Name(
-                                                id="value",
-                                                ctx=ast.Load()
-                                            )
-                                        ],
-                                        keywords=[]
-                                    ),
-                                    generators=[
-                                        ast.comprehension(
-                                            target=ast.Name(
-                                                id="value",
-                                                ctx=ast.Store()
-                                            ),
-                                            iter=values,
-                                            ifs=[],
-                                            is_async=0
-                                        )
-                                    ]
-                                )
-                            ],
-                            keywords=[]
-                        ),
-                    ],
-                    keywords=[]
-                )
-
-                return ast.copy_location(
-                    replacement,
-                    node
-                )
+    }
 
 
-            # -----------------------------
-            # input()
-            # -----------------------------
+    return pythonWorker;
 
-            if node.func.id == "input":
-
-                prompt = (
-                    node.args[0]
-                    if node.args
-                    else ast.Constant(
-                        value=""
-                    )
-                )
-
-                replacement = ast.Await(
-                    value=ast.Call(
-                        func=ast.Attribute(
-                            value=ast.Name(
-                                id="runtime",
-                                ctx=ast.Load()
-                            ),
-                            attr="writeIn",
-                            ctx=ast.Load()
-                        ),
-                        args=[
-                            prompt
-                        ],
-                        keywords=[]
-                    )
-                )
-
-                return ast.copy_location(
-                    replacement,
-                    node
-                )
-
-
-        return node
+}
 
 
 
-tree = ast.parse(
-    USER_CODE,
-    filename="<user_code>"
-)
+/* ============================================================================
+ * Handle stdin
+ * ========================================================================== */
 
+async function handleInputRequest(
 
-tree = RuntimeTransformer().visit(tree)
+    requestId: string,
 
+    prompt: string,
 
-async_function = ast.AsyncFunctionDef(
-    name="__user_program__",
-    args=ast.arguments(
-        posonlyargs=[],
-        args=[],
-        kwonlyargs=[],
-        kw_defaults=[],
-        defaults=[],
-    ),
-    body=tree.body,
-    decorator_list=[],
-)
-
-
-module = ast.Module(
-    body=[
-        async_function,
-    ],
-    type_ignores=[],
-)
-
-
-ast.fix_missing_locations(module)
-
-
-exec(
-    compile(
-        module,
-        "<user_code>",
-        "exec",
-    )
-)
-
-
-await __user_program__()
-`;
-
-
-export async function runPython(
-    code: string,
 ): Promise<void> {
-
-    runtime.open("Python Runtime");
-
-    runtime.clear();
-
-    runtime.writeOut(
-        "[System] Initializing Python Runtime...",
-        "90",
-    );
 
 
     try {
 
-        if (!pyodide) {
 
-            await loadPyodideScript();
+        const value =
+            await runtime.writeIn(
 
-            if (!window.loadPyodide) {
-                throw new Error(
-                    "Pyodide failed to initialize.",
-                );
-            }
+                prompt,
 
-            pyodide =
-                await window.loadPyodide({
-                    indexURL: "/pyodide/",
-                });
-        }
+            );
 
 
-        runtime.writeOut(
-            "[System] Done",
-            "90",
-        );
 
+        pythonWorker?.postMessage({
 
-        pyodide.globals.set(
-            "runtime",
-            runtime,
-        );
+            type:
+                "stdin-result",
 
+            requestId,
 
-        pyodide.globals.set(
-            "USER_CODE",
-            code,
-        );
+            value,
 
-
-        await pyodide.runPythonAsync(
-            pythonTransformer,
-        );
-
-
-        runtime.writeOut(
-            "[System] Program Finished",
-            "90",
-        );
+        });
 
 
     } catch (error) {
 
-        runtime.writeErr(
-            "[Runtime Error]",
-        );
+
+        pythonWorker?.postMessage({
+
+            type:
+                "stdin-cancel",
+
+            requestId,
+
+            message:
+                error instanceof Error
+                    ? error.message
+                    : String(error),
+
+        });
 
 
-        if (error instanceof Error) {
-            runtime.writeErr(
-                `${error.message}`,
-            );
-        }
-        else {
-            runtime.writeErr(
-                `${String(error)}`,
-            );
-        }
-
-
-        runtime.writeErr(
-            "[System] Program Failed",
-        );
     }
+
+}
+
+
+
+/* ============================================================================
+ * Run Python
+ * ========================================================================== */
+
+export async function runPython(
+
+    code: string,
+
+): Promise<void> {
+
+
+    /*
+     * Kill any previous execution.
+     */
+
+    if (pythonWorker) {
+
+        pythonWorker.terminate();
+
+        pythonWorker = null;
+
+    }
+
+
+
+    runtime.open(
+
+        "Python Runtime",
+
+    );
+
+
+    runtime.clear();
+
+
+
+    runtime.writeOut(
+
+        "[System] Initializing Python Runtime...",
+
+        "90",
+
+    );
+
+
+
+    const worker =
+        getPythonWorker();
+
+
+
+    worker.postMessage({
+
+        type:
+            "run",
+
+        code,
+
+    });
+
+
+}
+
+
+
+/* ============================================================================
+ * Cancel Python
+ * ========================================================================== */
+
+export function cancelPython(): void {
+
+
+    if (pythonWorker) {
+
+
+        pythonWorker.postMessage({
+
+            type:
+                "cancel",
+
+        });
+
+
+
+        /*
+         * Force stop execution.
+         */
+
+        pythonWorker.terminate();
+
+
+        pythonWorker =
+            null;
+
+    }
+
+
+
+    runtime.clear();
+
+
 }
