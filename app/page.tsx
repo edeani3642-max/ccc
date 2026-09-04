@@ -4,8 +4,8 @@ import CodeBlock from "@/components/editor/CodeBlock";
 
 import runtime from "@/lib/runtime/RunTime";
 
-const code = `user = "John Doe"
-print(f"Hello, {user}!")`;
+const code = `let user = "John Doe";
+console.log("Hello" + user + "!")`;
 export default function Home() {
     const runTests = async () => {
         runtime.open("JavaScript Runtime");
@@ -50,7 +50,7 @@ export default function Home() {
         <main className="flex h-screen flex-col gap-4 bg-[#0d1117] p-8">
             <div className="flex-1">
                 <CodeBlock
-                    language="python"
+                    language="javascript"
                     value={code}
                 />
             </div>

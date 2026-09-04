@@ -220,6 +220,9 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
 
                 convertEol: true,
 
+                fontFamily:
+                    '"Cascadia Mono", "Segoe UI Emoji", monospace',
+
                 theme: {
                     background: "#0d1117",
                 },

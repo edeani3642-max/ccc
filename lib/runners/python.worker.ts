@@ -2,1185 +2,440 @@
 
 export {};
 
-
-/* ============================================================================
- * Worker Scope
- * ========================================================================== */
-
-const workerScope =
-    self as unknown as DedicatedWorkerGlobalScope;
-
-
-
-/* ============================================================================
- * Pyodide Types
- * ========================================================================== */
+const worker = self as DedicatedWorkerGlobalScope;
 
 interface PyodideInterface {
+    runPythonAsync(code: string): Promise<unknown>;
 
-    runPythonAsync(
-        code: string,
-    ): Promise<any>;
+    setStdout(options: {
+        write?: (buffer: Uint8Array) => number;
+        raw?: (charCode: number) => void;
+    }): void;
 
+    setStderr(options: {
+        batched?: (text: string) => void;
+    }): void;
 
-    setStdout(
-        options: {
-            batched: (
-                text: string,
-            ) => void;
-        },
-    ): void;
-
-
-    setStderr(
-        options: {
-            batched: (
-                text: string,
-            ) => void;
-        },
-    ): void;
-
-
-    globals: {
-
-        set(
-            name: string,
-            value: any,
-        ): void;
-
-    };
-
+    setStdin(options: {
+        read?: (buffer: Uint8Array) => number;
+        stdin?: () =>
+            | string
+            | Uint8Array
+            | ArrayBuffer
+            | number
+            | null
+            | undefined;
+    }): void;
 }
 
+declare const loadPyodide: (options: {
+    indexURL: string;
+}) => Promise<PyodideInterface>;
 
+const PYODIDE_INDEX_URL = "/pyodide/";
+const PYODIDE_SCRIPT_URL = "/pyodide/pyodide.js";
 
-/* ============================================================================
- * Local Pyodide
- * ========================================================================== */
+/* -------------------------------------------------------------------------- */
+/* Pyodide                                                                     */
+/* -------------------------------------------------------------------------- */
 
-const PYODIDE_INDEX_URL =
+let pyodide: PyodideInterface | null = null;
+let pyodideLoading: Promise<PyodideInterface> | null = null;
+let running = false;
 
-    "/pyodide/";
+/* -------------------------------------------------------------------------- */
+/* Shared stdin                                                                */
+/* -------------------------------------------------------------------------- */
 
+let stdinBuffer: SharedArrayBuffer | null = null;
+let stdinState: Int32Array | null = null;
+let stdinBytes: Uint8Array | null = null;
 
-const PYODIDE_SCRIPT_URL =
+const STDIN_WAITING = 0;
+const STDIN_READY = 1;
+const STDIN_CANCELLED = 2;
 
-    "/pyodide/pyodide.js";
+/* -------------------------------------------------------------------------- */
+/* Encoding                                                                     */
+/* -------------------------------------------------------------------------- */
 
-
-
-/* ============================================================================
- * Runtime State
- * ========================================================================== */
-
-
-let pyodide:
-
-    PyodideInterface | null =
-
-        null;
-
-
-
-let pyodideLoading:
-
-    Promise<PyodideInterface> | null =
-
-        null;
-
-
-
-let cancelled = false;
-
-
-/* ============================================================================
- * Helper Functions
- * ========================================================================== */
-
+const textDecoder = new TextDecoder("utf-8");
+const textEncoder = new TextEncoder();
 
 /*
- * Load Pyodide once and cache it.
+ * Pyodide can give stdout to us in chunks which do not necessarily end
+ * at a newline. Keep incomplete output here until a complete line arrives.
  */
+let pendingStdout = "";
 
-async function getPyodide():
+/* -------------------------------------------------------------------------- */
+/* Messaging                                                                    */
+/* -------------------------------------------------------------------------- */
 
-    Promise<PyodideInterface> {
+function send(message: Record<string, unknown>): void {
+    worker.postMessage(message);
+}
 
+/* -------------------------------------------------------------------------- */
+/* Stdin                                                                        */
+/* -------------------------------------------------------------------------- */
 
-    /*
-     * Already loaded.
-     */
+function initializeStdin(buffer: SharedArrayBuffer): void {
+    stdinBuffer = buffer;
+    stdinState = new Int32Array(buffer, 0, 2);
+    stdinBytes = new Uint8Array(buffer, 8);
+}
 
-    if (pyodide) {
-
-        return pyodide;
-
+function readStdin(buffer: Uint8Array): number {
+    if (!stdinState || !stdinBytes) {
+        throw new Error(
+            "Python stdin was requested before the stdin buffer was initialized.",
+        );
     }
 
-
+    const state = stdinState;
+    const bytes = stdinBytes;
 
     /*
-     * Currently loading.
+     * Anything Python wrote without a trailing newline immediately before
+     * requesting stdin is the prompt.
      */
+    const placeholder = pendingStdout;
+    pendingStdout = "";
 
-    if (pyodideLoading) {
+    Atomics.store(state, 1, 0);
+    Atomics.store(state, 0, STDIN_WAITING);
 
-        return pyodideLoading;
+    send({
+        type: "stdin-request",
+        placeholder,
+    });
 
+    while (true) {
+        Atomics.wait(state, 0, STDIN_WAITING);
+
+        const currentState = Atomics.load(state, 0);
+
+        if (currentState === STDIN_CANCELLED) {
+            throw new Error("Runtime cancelled");
+        }
+
+        if (currentState !== STDIN_READY) {
+            continue;
+        }
+
+        const available = Atomics.load(state, 1);
+
+        if (available <= 0) {
+            Atomics.store(state, 0, STDIN_WAITING);
+            continue;
+        }
+
+        const length = Math.min(
+            available,
+            buffer.length,
+            bytes.length,
+        );
+
+        buffer.set(bytes.subarray(0, length));
+
+        if (length < available) {
+            bytes.copyWithin(0, length, available);
+        }
+
+        const remaining = available - length;
+
+        Atomics.store(state, 1, remaining);
+
+        if (remaining > 0) {
+            Atomics.store(state, 0, STDIN_READY);
+        } else {
+            Atomics.store(state, 0, STDIN_WAITING);
+        }
+
+        return length;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Stdout                                                                       */
+/* -------------------------------------------------------------------------- */
+
+function handleStdout(buffer: Uint8Array): void {
+    /*
+     * Decode UTF-8 exactly once.
+     *
+     * This is what preserves characters such as:
+     *
+     *     ×
+     *     → 
+     *     ✓
+     *     é
+     *     漢
+     */
+    const text = textDecoder.decode(buffer, {
+        stream: true,
+    });
+
+    if (!text) {
+        return;
     }
 
+    pendingStdout += text;
 
+    const parts = pendingStdout.split(/\r?\n/);
 
     /*
-     * Start loading.
+     * The final element is either an incomplete line or an empty string
+     * when the output ended with a newline.
      */
+    pendingStdout = parts.pop() ?? "";
 
-    pyodideLoading =
+    for (const line of parts) {
+        send({
+            type: "stdout",
+            text: line,
+        });
+    }
+}
 
-        (async () => {
+function flushPendingStdout(): void {
+    /*
+     * Finish any UTF-8 sequence still held by TextDecoder.
+     */
+    const remainder = textDecoder.decode();
 
+    if (remainder) {
+        pendingStdout += remainder;
+    }
+
+    if (!pendingStdout) {
+        return;
+    }
+
+    send({
+        type: "stdout",
+        text: pendingStdout,
+    });
+
+    pendingStdout = "";
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pyodide I/O                                                                  */
+/* -------------------------------------------------------------------------- */
+
+function configureIO(py: PyodideInterface): void {
+    py.setStdout({
+        write(buffer: Uint8Array) {
+            handleStdout(buffer);
 
             /*
-             * Load local Pyodide script.
+             * Pyodide expects the number of bytes successfully consumed.
              */
+            return buffer.length;
+        },
+    });
 
-            workerScope.importScripts(
+    py.setStderr({
+        batched(text: string) {
+            send({
+                type: "stderr",
+                text,
+            });
+        },
+    });
 
-                PYODIDE_SCRIPT_URL,
+    /*
+     * Native Pyodide stdin.
+     *
+     * Pyodide fills the supplied Uint8Array by calling this function.
+     */
+    py.setStdin({
+        read: readStdin,
+    });
+}
 
-            );
+/* -------------------------------------------------------------------------- */
+/* Pyodide loading                                                              */
+/* -------------------------------------------------------------------------- */
 
+async function getPyodide(): Promise<PyodideInterface> {
+    if (pyodide) {
+        return pyodide;
+    }
 
+    if (pyodideLoading) {
+        return pyodideLoading;
+    }
 
-            const loadPyodide =
+    pyodideLoading = (async () => {
+        worker.importScripts(PYODIDE_SCRIPT_URL);
 
-                (workerScope as any).loadPyodide;
+        const instance = await loadPyodide({
+            indexURL: PYODIDE_INDEX_URL,
+        });
 
+        pyodide = instance;
 
-
-            if (
-
-                typeof loadPyodide !==
-                "function"
-
-            ) {
-
-                throw new Error(
-
-                    "Pyodide loader unavailable.",
-
-                );
-
-            }
-
-
-
-            const instance =
-
-                await loadPyodide({
-
-                    indexURL:
-
-                        PYODIDE_INDEX_URL,
-
-                });
-
-
-
-            pyodide = instance;
-
-
-            return instance;
-
-
-        })();
-
-
+        return instance;
+    })();
 
     return pyodideLoading;
-
 }
 
-
-
-
-
-/*
- * Send event to main thread.
- */
-
-function send(
-
-    message: Record<string, any>,
-
-): void {
-
-
-    workerScope.postMessage(
-
-        message,
-
-    );
-
-}
-
-
-
-
-
-/*
- * Request terminal input from main thread.
- */
-
-function requestInput(
-
-    prompt: string,
-
-): Promise<string> {
-
-
-    return new Promise(
-
-        (
-
-            resolve,
-
-            reject,
-
-        ) => {
-
-
-            const requestId =
-
-                crypto.randomUUID();
-
-
-
-
-            function onMessage(
-
-                event: MessageEvent,
-
-            ) {
-
-
-                const data =
-
-                    event.data;
-
-
-
-                if (!data) {
-
-                    return;
-
-                }
-
-
-
-
-                if (
-
-                    data.requestId !==
-                    requestId
-
-                ) {
-
-                    return;
-
-                }
-
-
-
-
-                if (
-
-                    data.type !==
-                    "stdin-result"
-
-                    &&
-
-                    data.type !==
-                    "stdin-cancel"
-
-                ) {
-
-                    return;
-
-                }
-
-
-
-
-                workerScope.removeEventListener(
-
-                    "message",
-
-                    onMessage,
-
-                );
-
-
-
-
-                if (
-
-                    data.type ===
-                    "stdin-cancel"
-
-                ) {
-
-
-                    reject(
-
-                        new Error(
-
-                            data.message ??
-                            "Input cancelled.",
-
-                        ),
-
-                    );
-
-
-                    return;
-
-                }
-
-
-
-
-                resolve(
-
-                    String(
-
-                        data.value ?? "",
-
-                    ),
-
-                );
-
-
-            }
-
-
-
-
-
-            workerScope.addEventListener(
-
-                "message",
-
-                onMessage,
-
-            );
-
-
-
-
-
-            send({
-
-                type:
-
-                    "stdin-request",
-
-
-                requestId,
-
-
-                prompt,
-
-            });
-
-
-
-        },
-
-    );
-
-}
-
-
-/* ============================================================================
- * Python Transformer
- * ========================================================================== */
-
-const pythonTransformer = `
-
-import ast
-
-
-class RuntimeTransformer(ast.NodeTransformer):
-
-
-    def visit_Call(self, node):
-
-        self.generic_visit(node)
-
-
-        if isinstance(node.func, ast.Name):
-
-
-            # ================================================================
-            # print()
-            # ================================================================
-
-            if node.func.id == "print":
-
-
-                values = ast.List(
-
-                    elts=node.args,
-
-                    ctx=ast.Load()
-
-                )
-
-
-                replacement = ast.Call(
-
-                    func=ast.Attribute(
-
-                        value=ast.Name(
-
-                            id="runtime",
-
-                            ctx=ast.Load()
-
-                        ),
-
-                        attr="writeOut",
-
-                        ctx=ast.Load()
-
-                    ),
-
-
-                    args=[
-
-
-                        ast.Call(
-
-                            func=ast.Attribute(
-
-                                value=ast.Constant(
-
-                                    value=" "
-
-                                ),
-
-                                attr="join",
-
-                                ctx=ast.Load()
-
-                            ),
-
-
-                            args=[
-
-
-                                ast.GeneratorExp(
-
-                                    elt=ast.Call(
-
-                                        func=ast.Name(
-
-                                            id="str",
-
-                                            ctx=ast.Load()
-
-                                        ),
-
-                                        args=[
-
-                                            ast.Name(
-
-                                                id="value",
-
-                                                ctx=ast.Load()
-
-                                            )
-
-                                        ],
-
-                                        keywords=[]
-
-                                    ),
-
-
-                                    generators=[
-
-
-                                        ast.comprehension(
-
-                                            target=ast.Name(
-
-                                                id="value",
-
-                                                ctx=ast.Store()
-
-                                            ),
-
-                                            iter=values,
-
-                                            ifs=[],
-
-                                            is_async=0
-
-                                        )
-
-
-                                    ]
-
-                                )
-
-
-                            ],
-
-
-                            keywords=[]
-
-                        )
-
-
-                    ],
-
-
-                    keywords=[]
-
-                )
-
-
-                return ast.copy_location(
-
-                    replacement,
-
-                    node
-
-                )
-
-
-
-
-            # ================================================================
-            # input()
-            # ================================================================
-
-            if node.func.id == "input":
-
-
-                prompt = (
-
-                    node.args[0]
-
-                    if node.args
-
-                    else ast.Constant(
-
-                        value=""
-
-                    )
-
-                )
-
-
-
-                replacement = ast.Await(
-
-                    value=ast.Call(
-
-                        func=ast.Attribute(
-
-                            value=ast.Name(
-
-                                id="runtime",
-
-                                ctx=ast.Load()
-
-                            ),
-
-                            attr="writeIn",
-
-                            ctx=ast.Load()
-
-                        ),
-
-
-                        args=[
-
-                            prompt
-
-                        ],
-
-
-                        keywords=[]
-
-                    )
-
-                )
-
-
-                return ast.copy_location(
-
-                    replacement,
-
-                    node
-
-                )
-
-
-
-        return node
-
-
-
-
-
-tree = ast.parse(
-
-    USER_CODE,
-
-    filename="<user_code>"
-
-)
-
-
-
-tree = RuntimeTransformer().visit(tree)
-
-
-
-async_function = ast.AsyncFunctionDef(
-
-    name="__user_program__",
-
-
-    args=ast.arguments(
-
-        posonlyargs=[],
-
-        args=[],
-
-        kwonlyargs=[],
-
-        kw_defaults=[],
-
-        defaults=[],
-
-    ),
-
-
-    body=tree.body,
-
-
-    decorator_list=[],
-
-)
-
-
-
-module = ast.Module(
-
-    body=[
-
-        async_function
-
-    ],
-
-
-    type_ignores=[],
-
-)
-
-
-
-ast.fix_missing_locations(
-
-    module
-
-)
-
-
-
-exec(
-
-    compile(
-
-        module,
-
-        "<user_code>",
-
-        "exec"
-
-    )
-
-)
-
-
-
-await __user_program__()
-
-`;
-
-
-/* ============================================================================
- * Python Execution Engine
- * ========================================================================== */
-
-async function runPython(
-
-    code: string,
-
-): Promise<void> {
-
-
-    cancelled = false;
-
-
-
-    try {
-
-
-        /*
-         * Load cached Pyodide instance.
-         */
-
-        const py =
-
-            await getPyodide();
-
-
-
-
-
-        /*
-         * Configure stdout.
-         */
-
-        py.setStdout({
-
-            batched(
-
-                text: string,
-
-            ) {
-
-
-                if (cancelled) {
-
-                    return;
-
-                }
-
-
-
-                send({
-
-                    type:
-
-                        "writeOut",
-
-
-                    text,
-
-                });
-
-
-            },
-
-
-        });
-
-
-
-
-
-        /*
-         * Configure stderr.
-         */
-
-        py.setStderr({
-
-            batched(
-
-                text: string,
-
-            ) {
-
-
-                if (cancelled) {
-
-                    return;
-
-                }
-
-
-
-                send({
-
-                    type:
-
-                        "writeErr",
-
-
-                    text,
-
-                });
-
-
-            },
-
-
-        });
-
-
-
-
-
-
-        /*
-         * Notify main thread.
-         */
-
+/* -------------------------------------------------------------------------- */
+/* Running Python                                                               */
+/* -------------------------------------------------------------------------- */
+
+async function runPython(code: string): Promise<void> {
+    if (running) {
         send({
-
-            type:
-
-                "ready",
-
+            type: "error",
+            message: "A Python program is already running.",
         });
-
-
-
-
-
-
-        /*
-         * JavaScript bridge for input().
-         */
-
-        const runtimeInput = async (
-
-            prompt: string = "",
-
-        ): Promise<string> => {
-
-
-            if (cancelled) {
-
-                throw new Error(
-
-                    "Runtime cancelled.",
-
-                );
-
-            }
-
-
-
-            return requestInput(
-
-                String(prompt),
-
-            );
-
-
-        };
-
-
-
-
-
-
-        /*
-         * Expose runtime APIs to Python.
-         */
-
-        py.globals.set(
-
-            "runtime",
-
-            {
-
-
-                writeOut(
-
-                    text: string,
-
-                    color?: string,
-
-                ) {
-
-
-                    if (cancelled) {
-
-                        return;
-
-                    }
-
-
-
-                    send({
-
-                        type:
-
-                            "writeOut",
-
-
-                        text,
-
-
-                        color,
-
-                    });
-
-
-                },
-
-
-
-
-
-                writeErr(
-
-                    text: string,
-
-                ) {
-
-
-                    if (cancelled) {
-
-                        return;
-
-                    }
-
-
-
-                    send({
-
-                        type:
-
-                            "writeErr",
-
-
-                        text,
-
-                    });
-
-
-                },
-
-
-
-
-
-                writeIn:
-
-                    runtimeInput,
-
-
-            },
-
-        );
-
-
-
-
-
-
-
-        /*
-         * Expose student code.
-         */
-
-        py.globals.set(
-
-            "USER_CODE",
-
-            code,
-
-        );
-
-
-
-
-
-
-        /*
-         * Execute transformer.
-         */
-
-        await py.runPythonAsync(
-
-            pythonTransformer,
-
-        );
-
-
-
-
-
-
-
-        /*
-         * Finished successfully.
-         */
-
-        if (!cancelled) {
-
-
-            send({
-
-                type:
-
-                    "done",
-
-            });
-
-
-        }
-
-
-
-    } catch (
-
-        error: any
-
-    ) {
-
-
-        if (cancelled) {
-
-            return;
-
-        }
-
-
-
-        send({
-
-            type:
-
-                "error",
-
-
-
-            message:
-
-                error?.message ??
-                String(error),
-
-
-        });
-
-
-    }
-
-
-}
-
-
-/* ============================================================================
- * Worker Message Handler
- * ========================================================================== */
-
-workerScope.onmessage = (
-
-    event: MessageEvent,
-
-) => {
-
-
-    const data =
-
-        event.data;
-
-
-
-    if (!data) {
 
         return;
-
     }
 
+    running = true;
+    pendingStdout = "";
 
+    try {
+        const py = await getPyodide();
 
+        configureIO(py);
 
-    switch (
+        send({
+            type: "ready",
+        });
 
-        data.type
+        await py.runPythonAsync(code);
 
-    ) {
+        flushPendingStdout();
 
+        send({
+            type: "done",
+        });
+    } catch (error) {
+        flushPendingStdout();
 
+        send({
+            type: "error",
+            message:
+                error instanceof Error
+                    ? error.message
+                    : String(error),
+        });
+    } finally {
+        running = false;
+    }
+}
 
-        /* ================================================================
-         * Run Python program
-         * ================================================================ */
+/* -------------------------------------------------------------------------- */
+/* Worker messages                                                              */
+/* -------------------------------------------------------------------------- */
 
-        case "run":
+worker.onmessage = (event: MessageEvent) => {
+    const data = event.data;
 
+    if (!data) {
+        return;
+    }
 
-            runPython(
+    switch (data.type) {
+        case "init-stdin": {
+            initializeStdin(data.buffer);
+            break;
+        }
 
-                data.code ?? "",
+        case "stdin-result": {
+            if (!stdinState || !stdinBytes) {
+                return;
+            }
 
+            const value = String(data.value ?? "");
+            const encoded = textEncoder.encode(value + "\n");
+
+            if (encoded.length > stdinBytes.length) {
+                send({
+                    type: "error",
+                    message: "Input is too long.",
+                });
+
+                Atomics.store(stdinState, 1, 0);
+                Atomics.store(
+                    stdinState,
+                    0,
+                    STDIN_CANCELLED,
+                );
+
+                Atomics.notify(stdinState, 0);
+
+                return;
+            }
+
+            stdinBytes.fill(0);
+            stdinBytes.set(encoded);
+
+            Atomics.store(
+                stdinState,
+                1,
+                encoded.length,
             );
 
+            Atomics.store(
+                stdinState,
+                0,
+                STDIN_READY,
+            );
+
+            Atomics.notify(
+                stdinState,
+                0,
+            );
 
             break;
+        }
 
+        case "stdin-cancel": {
+            if (stdinState) {
+                Atomics.store(stdinState, 1, 0);
 
+                Atomics.store(
+                    stdinState,
+                    0,
+                    STDIN_CANCELLED,
+                );
 
-
-
-        /* ================================================================
-         * stdin result
-         *
-         * These messages are handled by
-         * requestInput() temporary listeners.
-         * ================================================================ */
-
-        case "stdin-result":
-
-
-            break;
-
-
-
-
-
-        /* ================================================================
-         * stdin cancelled
-         *
-         * These messages are handled by
-         * requestInput() temporary listeners.
-         * ================================================================ */
-
-        case "stdin-cancel":
-
+                Atomics.notify(stdinState, 0);
+            }
 
             break;
+        }
 
-
-
-
-
-        /* ================================================================
-         * Cancel execution
-         * ================================================================ */
-
-        case "cancel":
-
-
-            cancelled = true;
-
+        case "run": {
+            void runPython(
+                String(data.code ?? ""),
+            );
 
             break;
+        }
 
+        case "cancel": {
+            if (stdinState) {
+                Atomics.store(stdinState, 1, 0);
 
+                Atomics.store(
+                    stdinState,
+                    0,
+                    STDIN_CANCELLED,
+                );
+
+                Atomics.notify(stdinState, 0);
+            }
+
+            break;
+        }
     }
-
-
 };
