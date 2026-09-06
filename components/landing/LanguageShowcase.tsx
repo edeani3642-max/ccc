@@ -243,12 +243,12 @@ export default function LanguageShowcase() {
                             Learn by writing code
                         </p>
 
-                        <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+                        <h2 className="text-2xl font-semibold tracking-tight sm:text-4xl">
                             Don't just read code. Write it.
                         </h2>
 
                         <p className="mt-4 text-zinc-400">
-                            Below are languages you can start with today
+                            Pick a language below to start with today
                         </p>
                     </div>
 

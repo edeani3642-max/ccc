@@ -78,57 +78,77 @@ export default function Hero() {
     const [showStartCodingModal, setShowStartCodingModal] =
         useState(false);
 
+    const today = new Date();
+
+    const classDate = new Date(
+        today.getFullYear(),
+        8,
+        12,
+    );
+
+    const daysToGo = Math.ceil(
+        (classDate.getTime() - today.getTime()) /
+            (1000 * 60 * 60 * 24),
+    );
+
+    const classStatus =
+        daysToGo > 0
+            ? `${daysToGo} ${daysToGo === 1 ? "day" : "days"} to go`
+            : daysToGo === 0
+                ? "Today"
+                : "Already done · Tap to see highlights";
+
     return (
         <>
             <section
                 id="home"
-                className="relative flex min-h-[50svh] items-center overflow-hidden bg-zinc-950 text-white sm:min-h-[80svh] lg:min-h-svh"
+                className="relative mt-16 min-h-[50svh] overflow-hidden bg-zinc-950 text-white sm:mt-0 sm:min-h-[80svh] lg:min-h-svh"
             >
-                <div
-                    className="absolute inset-0 bg-cover bg-center"
-                    style={{
-                        backgroundImage:
-                            "url('https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=2400&q=85')",
-                    }}
+                <img
+                    src="/hero.png"
+                    alt=""
+                    className="h-auto w-full"
                 />
 
-                <div className="absolute inset-0 bg-black/70" />
+                <div className="absolute inset-0 bg-black/70 sm:bg-black/65" />
 
-                <div className="absolute inset-0 bg-linear-to-b from-black/40 via-black/60 to-zinc-950" />
+                <div className="absolute inset-0 bg-linear-to-b from-black/50 via-black/60 to-zinc-950" />
 
-                <div className="relative z-10 mx-auto w-full max-w-5xl px-5 py-24 text-center sm:px-6 sm:py-28 lg:py-32">
-                    <p className="mb-5 text-xs font-semibold uppercase tracking-[0.25em] text-zinc-300 sm:text-sm sm:tracking-[0.3em]">
-                        The future of learning to code
-                    </p>
+                <div className="absolute inset-0 z-10 flex items-center justify-center">
+                    <div className="mx-auto flex w-full max-w-5xl flex-col items-center px-5 py-6 text-center sm:px-6 sm:py-28 lg:py-32">
+                        <p className="mb-2 text-[8px] font-semibold uppercase tracking-[0.18em] text-zinc-300 sm:mb-5 sm:text-sm sm:tracking-[0.3em]">
+                            The future of learning to code
+                        </p>
 
-                    <h1 className="mx-auto max-w-4xl text-3xl font-semibold leading-[1.12] tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
-                        The study of programming restructured to meet current
-                        needs through interactive learning
-                    </h1>
+                        <h1 className="mx-auto max-w-4xl text-[1.2rem] font-semibold leading-[1.05] tracking-tight sm:text-5xl sm:leading-[1.12] md:text-6xl lg:text-7xl">
+                            The study of programming restructured to meet
+                            current needs through interactive learning
+                        </h1>
 
-                    <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:mt-10 sm:flex-row">
-                        <a
-                            href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
-                            type="button"
-                            className="w-full rounded-xl bg-green-500 px-6 py-4 text-sm font-semibold text-black shadow-md shadow-purple-300/20 transition hover:bg-green-400 sm:w-auto"
-                        >
-                            I will attend the free Python class <br />
-                            <span className="text-zinc-800">
-                                {
-                                    12 - new Date().getDate() > 0 ? `${12 - new Date().getDate()} days to go` : 12 - new Date().getDate() === 0 ? `Today` : `Already Done. Tap to see highlights`
+                        <div className="mt-4 flex w-full max-w-xs flex-col gap-2 sm:mt-10 sm:max-w-none sm:flex-row sm:items-center sm:justify-center">
+                            <a
+                                href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
+                                className="flex w-full flex-col items-center justify-center rounded-lg bg-green-500 px-4 py-2.5 text-xs font-semibold leading-4 text-black shadow-md shadow-green-500/20 transition hover:bg-green-400 sm:w-auto sm:px-6 sm:py-4 sm:text-sm sm:leading-5"
+                            >
+                                <span>
+                                    I will attend the free Python class
+                                </span>
+
+                                <span className="mt-0.5 text-[9px] font-medium text-zinc-800 sm:text-[11px]">
+                                    {classStatus}
+                                </span>
+                            </a>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setShowStartCodingModal(true)
                                 }
-                            </span>
-
-                        </a>
-                        <button
-                            type="button"
-                            onClick={() =>
-                                setShowStartCodingModal(true)
-                            }
-                            className="w-full rounded-xl border border-white/20 bg-white/10 px-6 py-4 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/15 sm:w-auto"
-                        >
-                            Start coding
-                        </button>
+                                className="w-full rounded-lg border border-white/20 bg-white/10 px-4 py-2.5 text-xs font-semibold text-white backdrop-blur transition hover:bg-white/15 sm:w-auto sm:px-6 sm:py-4 sm:text-sm"
+                            >
+                                Start coding
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -143,4 +163,3 @@ export default function Hero() {
         </>
     );
 }
-//https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7
