@@ -22,8 +22,12 @@ export default function HomePage() {
                         className="text-lg font-semibold tracking-tight"
                         onClick={() => setMenuOpen(false)}
                     >
-                        CampusCodeCamp
-                        <p className="text-[0.7rem] bg-linear-to-br from-white via-zinc-500 to-zinc-800 bg-clip-text text-transparent">BUILT FOR BEGINNERS</p>
+                        <div className="h-full flex justify-baseline align-middle gap-1">
+                            <img src="icon.svg" className="h-full w-1/10 bg-zinc-900 self-center rounded-[50%]"/>
+                            <span className="self-center">
+                            <span className="text-green-300">Campus</span><span className="text-blue-300">Code</span><span className="text-purple-300">Camp</span>
+                            </span>
+                        </div>
                     </a>
 
                     {/* Desktop navigation */}
@@ -368,7 +372,7 @@ export default function HomePage() {
                 <div className="mx-auto max-w-3xl">
 
                     <p className="text-4xl font-semibold tracking-tight sm:text-5xl">
-                        Your first line of code is actually closer
+                        Your first line of code is much closer
                         than you think.
                     </p>
 

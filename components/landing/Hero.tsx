@@ -101,19 +101,25 @@ export default function Hero() {
                         The future of learning to code
                     </p>
 
-                    <h1 className="mx-auto max-w-4xl text-4xl font-semibold leading-[1.12] tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
+                    <h1 className="mx-auto max-w-4xl text-3xl font-semibold leading-[1.12] tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
                         The study of programming restructured to meet current
                         needs through interactive learning
                     </h1>
 
                     <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:mt-10 sm:flex-row">
-                        <button
+                        <a
+                            href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
                             type="button"
-                            className="w-full rounded-xl bg-emerald-500 px-6 py-4 text-sm font-semibold text-black shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 sm:w-auto"
+                            className="w-full rounded-xl bg-green-500 px-6 py-4 text-sm font-semibold text-black shadow-md shadow-purple-300/20 transition hover:bg-green-400 sm:w-auto"
                         >
-                            I will attend the free Python class
-                        </button>
+                            I will attend the free Python class <br />
+                            <span className="text-zinc-800">
+                                {
+                                    12 - new Date().getDate() > 0 ? `${12 - new Date().getDate()} days to go` : 12 - new Date().getDate() === 0 ? `Today` : `Already Done. Tap to see highlights`
+                                }
+                            </span>
 
+                        </a>
                         <button
                             type="button"
                             onClick={() =>
@@ -137,3 +143,4 @@ export default function Hero() {
         </>
     );
 }
+//https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7

@@ -95,19 +95,21 @@ export default function CourseModal({
                     </div>
 
                     <div className="space-y-3">
-                        <button
+                        <a
+                            href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
                             type="button"
-                            className="w-full rounded-xl bg-emerald-500 px-5 py-3.5 text-sm font-semibold text-black transition hover:bg-emerald-400"
+                            className="flex align-middle justify-center w-full rounded-xl bg-emerald-500 px-5 py-3.5 text-sm font-semibold text-black transition hover:bg-emerald-400"
                         >
                             Join the on site class
-                        </button>
+                        </a>
 
-                        <button
+                        <a
+                            href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
                             type="button"
-                            className="w-full rounded-xl border border-white/15 bg-white/5 px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-white/10"
+                            className="flex align-middle justify-center w-full rounded-xl border border-white/15 bg-white/5 px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-white/10"
                         >
                             Join the online class
-                        </button>
+                        </a>
                     </div>
                 </div>
             </div>

@@ -21,9 +21,9 @@ const courses: {
                 name: "Python",
                 language: "python",
                 level: "Beginner",
-                duration: "8 weeks",
+                duration: "6 weeks",
                 description:
-                    "Learn programming fundamentals with Python through interactive lessons, practical exercises, and real code.",
+                    "Learn fundamentals of Python programming through interactive lessons, practical exercises, and projects.",
             },
 
             snippets: [
@@ -43,7 +43,7 @@ for number in numbers:
                 name: "JavaScript",
                 language: "javascript",
                 level: "Beginner",
-                duration: "8 weeks",
+                duration: "6 weeks",
                 description:
                     "Learn the fundamentals of JavaScript and start building interactive experiences for the web.",
             },
@@ -66,7 +66,7 @@ numbers.forEach(number => {
                 name: "HTML",
                 language: "html",
                 level: "Beginner",
-                duration: "6 weeks",
+                duration: "4 weeks",
                 description:
                     "Learn how web pages are structured and build the foundation of the websites you use every day.",
             },
