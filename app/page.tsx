@@ -135,7 +135,7 @@ export default function HomePage() {
                     </div>
 
                     {/* Image placeholder */}
-                    <div className="relative min-h-[360px] bg-zinc-800">
+                    <div className="relative min-h-90 bg-zinc-800">
                         <div
                             className="absolute inset-0 bg-cover bg-center"
                             style={{
