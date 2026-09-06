@@ -18,6 +18,7 @@ interface CodeMirrorEditorProps {
     language: EditorLanguage;
     editable: boolean;
     value: string;
+    height?: string;
     onChange?: (value: string) => void;
 }
 
@@ -25,6 +26,7 @@ export default function CodeMirrorEditor({
     language,
     editable,
     value,
+    height = "100%",
     onChange,
 }: CodeMirrorEditorProps) {
     const extensions = useMemo(() => {
@@ -69,7 +71,7 @@ export default function CodeMirrorEditor({
             }}
             style={{
                 width: "100%",
-                height: "100%",
+                height,
             }}
         />
     );

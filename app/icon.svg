@@ -1,0 +1,15 @@
+<svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 512 512"
+>
+    <text
+        x="256"
+        y="335"
+        text-anchor="middle"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+        font-size="150"
+        font-weight="900"
+        letter-spacing="-8"
+        fill="#34D399"
+    >&lt;CCC/&gt;</text>
+</svg>
