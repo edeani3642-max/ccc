@@ -120,8 +120,8 @@ export default function Hero() {
                             The future of learning to code
                         </p>
 
-                        <h1 className="mx-auto max-w-4xl text-[1.2rem] font-semibold leading-[1.05] tracking-tight sm:text-5xl sm:leading-[1.12] md:text-6xl lg:text-7xl">
-                            The study of programming restructured to meet
+                        <h1 className="mx-auto max-w-4xl text-[1.2rem] font-semibold leading-[1.05] tracking-tight sm:text-5xl sm:leading-[1.0] md:text-6xl lg:text-7xl">
+                            Learning programming restructured to meet
                             current needs through interactive learning
                         </h1>
 
