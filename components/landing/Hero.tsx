@@ -92,11 +92,13 @@ export default function Hero() {
     );
 
     const classStatus =
-        daysToGo > 0
-            ? `${daysToGo} ${daysToGo === 1 ? "day" : "days"} to go`
-            : daysToGo === 0
-                ? "Today"
-                : "Already done · Tap to see highlights";
+        daysToGo === 1 ?
+            "Tomorrow"
+            :daysToGo > 0
+                ? `${daysToGo} days to go`
+                : daysToGo === 0
+                    ? "Today"
+                    : "Already done · Tap to see highlights";
 
     return (
         <>
@@ -127,7 +129,7 @@ export default function Hero() {
 
                         <div className="mt-4 flex w-full max-w-xs flex-col gap-2 sm:mt-10 sm:max-w-none sm:flex-row sm:items-center sm:justify-center">
                             <a
-                                href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
+                                href="https://chat.whatsapp.com/L4npBhH4ariIKHIMUESUR7"
                                 className="flex w-full flex-col items-center justify-center rounded-lg bg-green-500 px-4 py-2.5 text-xs font-semibold leading-4 text-black shadow-md shadow-green-500/20 transition hover:bg-green-400 sm:w-auto sm:px-6 sm:py-4 sm:text-sm sm:leading-5"
                             >
                                 <span>

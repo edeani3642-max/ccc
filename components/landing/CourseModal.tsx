@@ -96,7 +96,7 @@ export default function CourseModal({
 
                     <div className="space-y-3">
                         <a
-                            href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
+                            href="https://chat.whatsapp.com/L4npBhH4ariIKHIMUESUR7"
                             type="button"
                             className="flex align-middle justify-center w-full rounded-xl bg-emerald-500 px-5 py-3.5 text-sm font-semibold text-black transition hover:bg-emerald-400"
                         >
@@ -104,7 +104,7 @@ export default function CourseModal({
                         </a>
 
                         <a
-                            href="https://chat.whatsapp.com/L4npBhH4arilKHIMUESUR7"
+                            href="https://chat.whatsapp.com/L4npBhH4ariIKHIMUESUR7"
                             type="button"
                             className="flex align-middle justify-center w-full rounded-xl border border-white/15 bg-white/5 px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-white/10"
                         >
