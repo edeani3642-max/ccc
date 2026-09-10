@@ -1,325 +1,343 @@
-/// <reference lib="webworker" />
+type RunMessage = {
+    type: "run";
+    code: string;
+    stdinBuffer: SharedArrayBuffer;
+};
 
-export {};
+type Pyodide = {
+    runPythonAsync(
+        code: string,
+    ): Promise<unknown>;
 
-const worker = self as DedicatedWorkerGlobalScope;
-
-interface PyodideInterface {
-    runPythonAsync(code: string): Promise<unknown>;
+    setStdin(options: {
+        stdin: () => string | undefined;
+        autoEOF?: boolean;
+    }): void;
 
     setStdout(options: {
-        write?: (buffer: Uint8Array) => number;
-        raw?: (charCode: number) => void;
+        raw?: (
+            charCode: number,
+        ) => void;
+
+        isatty?: boolean;
     }): void;
 
     setStderr(options: {
-        batched?: (text: string) => void;
+        raw?: (
+            charCode: number,
+        ) => void;
+
+        isatty?: boolean;
     }): void;
+};
 
-    setStdin(options: {
-        read?: (buffer: Uint8Array) => number;
-        stdin?: () =>
-            | string
-            | Uint8Array
-            | ArrayBuffer
-            | number
-            | null
-            | undefined;
-    }): void;
-}
+type LoadPyodide = (
+    options: {
+        indexURL: string;
+    },
+) => Promise<Pyodide>;
 
-declare const loadPyodide: (options: {
-    indexURL: string;
-}) => Promise<PyodideInterface>;
+declare const loadPyodide: LoadPyodide;
 
-const PYODIDE_INDEX_URL = "/pyodide/";
-const PYODIDE_SCRIPT_URL = "/pyodide/pyodide.js";
+declare function importScripts(
+    ...urls: string[]
+): void;
 
 /* -------------------------------------------------------------------------- */
-/* Pyodide                                                                     */
+/* Stdin                                                                      */
 /* -------------------------------------------------------------------------- */
-
-let pyodide: PyodideInterface | null = null;
-let pyodideLoading: Promise<PyodideInterface> | null = null;
-let running = false;
-
-/* -------------------------------------------------------------------------- */
-/* Shared stdin                                                                */
-/* -------------------------------------------------------------------------- */
-
-let stdinBuffer: SharedArrayBuffer | null = null;
-let stdinState: Int32Array | null = null;
-let stdinBytes: Uint8Array | null = null;
 
 const STDIN_WAITING = 0;
 const STDIN_READY = 1;
-const STDIN_CANCELLED = 2;
+
+let stdinState:
+    Int32Array | null = null;
+
+let stdinBytes:
+    Uint8Array | null = null;
+
+const decoder =
+    new TextDecoder();
 
 /* -------------------------------------------------------------------------- */
-/* Encoding                                                                     */
+/* Output decoding                                                            */
 /* -------------------------------------------------------------------------- */
 
-const textDecoder = new TextDecoder("utf-8");
-const textEncoder = new TextEncoder();
+const stdoutDecoder =
+    new TextDecoder();
 
-/*
- * Pyodide can give stdout to us in chunks which do not necessarily end
- * at a newline. Keep incomplete output here until a complete line arrives.
- */
-let pendingStdout = "";
+const stderrDecoder =
+    new TextDecoder();
 
 /* -------------------------------------------------------------------------- */
-/* Messaging                                                                    */
+/* Messaging                                                                  */
 /* -------------------------------------------------------------------------- */
 
-function send(message: Record<string, unknown>): void {
-    worker.postMessage(message);
+function send(
+    message: unknown,
+): void {
+    self.postMessage(message);
 }
 
 /* -------------------------------------------------------------------------- */
-/* Stdin                                                                        */
+/* Stdin                                                                      */
 /* -------------------------------------------------------------------------- */
 
-function initializeStdin(buffer: SharedArrayBuffer): void {
-    stdinBuffer = buffer;
-    stdinState = new Int32Array(buffer, 0, 2);
-    stdinBytes = new Uint8Array(buffer, 8);
-}
+function readStdin(): string {
 
-function readStdin(buffer: Uint8Array): number {
-    if (!stdinState || !stdinBytes) {
-        throw new Error(
-            "Python stdin was requested before the stdin buffer was initialized.",
-        );
+    if (
+        !stdinState ||
+        !stdinBytes
+    ) {
+        return "";
     }
 
-    const state = stdinState;
-    const bytes = stdinBytes;
+    const state =
+        stdinState;
 
-    /*
-     * Anything Python wrote without a trailing newline immediately before
-     * requesting stdin is the prompt.
-     */
-    const placeholder = pendingStdout;
-    pendingStdout = "";
-
-    Atomics.store(state, 1, 0);
-    Atomics.store(state, 0, STDIN_WAITING);
+    const bytes =
+        stdinBytes;
 
     send({
         type: "stdin-request",
-        placeholder,
     });
 
-    while (true) {
-        Atomics.wait(state, 0, STDIN_WAITING);
+    Atomics.wait(
+        state,
+        0,
+        STDIN_WAITING,
+    );
 
-        const currentState = Atomics.load(state, 0);
-
-        if (currentState === STDIN_CANCELLED) {
-            throw new Error("Runtime cancelled");
-        }
-
-        if (currentState !== STDIN_READY) {
-            continue;
-        }
-
-        const available = Atomics.load(state, 1);
-
-        if (available <= 0) {
-            Atomics.store(state, 0, STDIN_WAITING);
-            continue;
-        }
-
-        const length = Math.min(
-            available,
-            buffer.length,
-            bytes.length,
+    const status =
+        Atomics.load(
+            state,
+            0,
         );
 
-        buffer.set(bytes.subarray(0, length));
+    const length =
+        Atomics.load(
+            state,
+            1,
+        );
 
-        if (length < available) {
-            bytes.copyWithin(0, length, available);
-        }
-
-        const remaining = available - length;
-
-        Atomics.store(state, 1, remaining);
-
-        if (remaining > 0) {
-            Atomics.store(state, 0, STDIN_READY);
-        } else {
-            Atomics.store(state, 0, STDIN_WAITING);
-        }
-
-        return length;
+    if (
+        status !== STDIN_READY
+    ) {
+        return "";
     }
+
+    const copiedBytes =
+        new Uint8Array(
+            length,
+        );
+
+    copiedBytes.set(
+        bytes.subarray(
+            0,
+            length,
+        ),
+    );
+
+    const value =
+        decoder.decode(
+            copiedBytes,
+        );
+
+    Atomics.store(
+        state,
+        1,
+        0,
+    );
+
+    Atomics.store(
+        state,
+        0,
+        STDIN_WAITING,
+    );
+
+    return value;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Stdout                                                                       */
+/* Load Pyodide                                                               */
 /* -------------------------------------------------------------------------- */
 
-function handleStdout(buffer: Uint8Array): void {
-    /*
-     * Decode UTF-8 exactly once.
-     *
-     * This is what preserves characters such as:
-     *
-     *     ×
-     *     → 
-     *     ✓
-     *     é
-     *     漢
-     */
-    const text = textDecoder.decode(buffer, {
-        stream: true,
+async function loadPython(): Promise<Pyodide> {
+    importScripts(
+        "/pyodide/pyodide.js",
+    );
+
+    return await loadPyodide({
+        indexURL:
+            "/pyodide/",
+    });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Run Python                                                                 */
+/* -------------------------------------------------------------------------- */
+
+async function runPython(
+    code: string,
+    buffer: SharedArrayBuffer,
+): Promise<void> {
+    stdinState =
+        new Int32Array(
+            buffer,
+            0,
+            2,
+        );
+
+    stdinBytes =
+        new Uint8Array(
+            buffer,
+            8,
+        );
+
+    Atomics.store(
+        stdinState,
+        0,
+        STDIN_WAITING,
+    );
+
+    Atomics.store(
+        stdinState,
+        1,
+        0,
+    );
+
+    send({
+        type: "initializing",
     });
 
-    if (!text) {
-        return;
-    }
+    const pyodide =
+        await loadPython();
 
-    pendingStdout += text;
+    /* ---------------------------------------------------------------------- */
+    /* stdout                                                                 */
+    /* ---------------------------------------------------------------------- */
 
-    const parts = pendingStdout.split(/\r?\n/);
+    pyodide.setStdout({
+        raw(charCode) {
+            const byte =
+                new Uint8Array([
+                    charCode,
+                ]);
 
-    /*
-     * The final element is either an incomplete line or an empty string
-     * when the output ended with a newline.
-     */
-    pendingStdout = parts.pop() ?? "";
+            const text =
+                stdoutDecoder.decode(
+                    byte,
+                    {
+                        stream: true,
+                    },
+                );
 
-    for (const line of parts) {
+            if (text) {
+                send({
+                    type: "stdout",
+                    text,
+                });
+            }
+        },
+    });
+
+    /* ---------------------------------------------------------------------- */
+    /* stderr                                                                 */
+    /* ---------------------------------------------------------------------- */
+
+    pyodide.setStderr({
+        raw(charCode) {
+            const byte =
+                new Uint8Array([
+                    charCode,
+                ]);
+
+            const text =
+                stderrDecoder.decode(
+                    byte,
+                    {
+                        stream: true,
+                    },
+                );
+
+            if (text) {
+                send({
+                    type: "stderr",
+                    text,
+                });
+            }
+        },
+    });
+
+    /* ---------------------------------------------------------------------- */
+    /* stdin                                                                  */
+    /* ---------------------------------------------------------------------- */
+
+    pyodide.setStdin({
+        stdin: readStdin,
+        autoEOF: true,
+    });
+
+    send({
+        type: "ready",
+    });
+
+    await pyodide.runPythonAsync(
+        code,
+    );
+
+    /* ---------------------------------------------------------------------- */
+    /* Flush output                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    const remainingStdout =
+        stdoutDecoder.decode();
+
+    if (remainingStdout) {
         send({
             type: "stdout",
-            text: line,
+            text: remainingStdout,
         });
     }
-}
 
-function flushPendingStdout(): void {
-    /*
-     * Finish any UTF-8 sequence still held by TextDecoder.
-     */
-    const remainder = textDecoder.decode();
+    const remainingStderr =
+        stderrDecoder.decode();
 
-    if (remainder) {
-        pendingStdout += remainder;
-    }
-
-    if (!pendingStdout) {
-        return;
+    if (remainingStderr) {
+        send({
+            type: "stderr",
+            text: remainingStderr,
+        });
     }
 
     send({
-        type: "stdout",
-        text: pendingStdout,
-    });
-
-    pendingStdout = "";
-}
-
-/* -------------------------------------------------------------------------- */
-/* Pyodide I/O                                                                  */
-/* -------------------------------------------------------------------------- */
-
-function configureIO(py: PyodideInterface): void {
-    py.setStdout({
-        write(buffer: Uint8Array) {
-            handleStdout(buffer);
-
-            /*
-             * Pyodide expects the number of bytes successfully consumed.
-             */
-            return buffer.length;
-        },
-    });
-
-    py.setStderr({
-        batched(text: string) {
-            send({
-                type: "stderr",
-                text,
-            });
-        },
-    });
-
-    /*
-     * Native Pyodide stdin.
-     *
-     * Pyodide fills the supplied Uint8Array by calling this function.
-     */
-    py.setStdin({
-        read: readStdin,
+        type: "done",
     });
 }
 
 /* -------------------------------------------------------------------------- */
-/* Pyodide loading                                                              */
+/* Worker message                                                             */
 /* -------------------------------------------------------------------------- */
 
-async function getPyodide(): Promise<PyodideInterface> {
-    if (pyodide) {
-        return pyodide;
-    }
+self.onmessage = async (
+    event: MessageEvent<RunMessage>,
+) => {
+    const data =
+        event.data;
 
-    if (pyodideLoading) {
-        return pyodideLoading;
-    }
-
-    pyodideLoading = (async () => {
-        worker.importScripts(PYODIDE_SCRIPT_URL);
-
-        const instance = await loadPyodide({
-            indexURL: PYODIDE_INDEX_URL,
-        });
-
-        pyodide = instance;
-
-        return instance;
-    })();
-
-    return pyodideLoading;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Running Python                                                               */
-/* -------------------------------------------------------------------------- */
-
-async function runPython(code: string): Promise<void> {
-    if (running) {
-        send({
-            type: "error",
-            message: "A Python program is already running.",
-        });
-
+    if (
+        !data ||
+        data.type !== "run"
+    ) {
         return;
     }
 
-    running = true;
-    pendingStdout = "";
-
     try {
-        const py = await getPyodide();
-
-        configureIO(py);
-
-        send({
-            type: "ready",
-        });
-
-        await py.runPythonAsync(code);
-
-        flushPendingStdout();
-
-        send({
-            type: "done",
-        });
+        await runPython(
+            data.code,
+            data.stdinBuffer,
+        );
     } catch (error) {
-        flushPendingStdout();
-
         send({
             type: "error",
             message:
@@ -328,114 +346,7 @@ async function runPython(code: string): Promise<void> {
                     : String(error),
         });
     } finally {
-        running = false;
-    }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Worker messages                                                              */
-/* -------------------------------------------------------------------------- */
-
-worker.onmessage = (event: MessageEvent) => {
-    const data = event.data;
-
-    if (!data) {
-        return;
-    }
-
-    switch (data.type) {
-        case "init-stdin": {
-            initializeStdin(data.buffer);
-            break;
-        }
-
-        case "stdin-result": {
-            if (!stdinState || !stdinBytes) {
-                return;
-            }
-
-            const value = String(data.value ?? "");
-            const encoded = textEncoder.encode(value + "\n");
-
-            if (encoded.length > stdinBytes.length) {
-                send({
-                    type: "error",
-                    message: "Input is too long.",
-                });
-
-                Atomics.store(stdinState, 1, 0);
-                Atomics.store(
-                    stdinState,
-                    0,
-                    STDIN_CANCELLED,
-                );
-
-                Atomics.notify(stdinState, 0);
-
-                return;
-            }
-
-            stdinBytes.fill(0);
-            stdinBytes.set(encoded);
-
-            Atomics.store(
-                stdinState,
-                1,
-                encoded.length,
-            );
-
-            Atomics.store(
-                stdinState,
-                0,
-                STDIN_READY,
-            );
-
-            Atomics.notify(
-                stdinState,
-                0,
-            );
-
-            break;
-        }
-
-        case "stdin-cancel": {
-            if (stdinState) {
-                Atomics.store(stdinState, 1, 0);
-
-                Atomics.store(
-                    stdinState,
-                    0,
-                    STDIN_CANCELLED,
-                );
-
-                Atomics.notify(stdinState, 0);
-            }
-
-            break;
-        }
-
-        case "run": {
-            void runPython(
-                String(data.code ?? ""),
-            );
-
-            break;
-        }
-
-        case "cancel": {
-            if (stdinState) {
-                Atomics.store(stdinState, 1, 0);
-
-                Atomics.store(
-                    stdinState,
-                    0,
-                    STDIN_CANCELLED,
-                );
-
-                Atomics.notify(stdinState, 0);
-            }
-
-            break;
-        }
+        stdinState = null;
+        stdinBytes = null;
     }
 };

@@ -19,11 +19,14 @@ import type {
 } from "@/lib/terminal/types";
 
 const RunWindow = forwardRef<RuntimeHandle>((_, ref) => {
-    const terminalRef = useRef<Terminal>(null);
+    const terminalRef =
+        useRef<Terminal>(null);
 
-    const [isOpen, setIsOpen] = useState(false);
+    const [isOpen, setIsOpen] =
+        useState(false);
 
-    const [title, setTitle] = useState("Runtime");
+    const [title, setTitle] =
+        useState("Runtime");
 
     const runtimeHandle: RuntimeHandle = {
         open(runtimeTitle = "Runtime") {
@@ -40,15 +43,24 @@ const RunWindow = forwardRef<RuntimeHandle>((_, ref) => {
         },
 
         writeOut(text, color) {
-            terminalRef.current!.writeOut(text, color);
+            terminalRef.current!.writeOut(
+                text,
+                color,
+            );
         },
 
         writeErr(text) {
-            terminalRef.current!.writeErr(text);
+            terminalRef.current!.writeErr(
+                text,
+            );
         },
 
-        writeIn(prompt) {
-            return terminalRef.current!.writeIn(prompt);
+        writeIn() {
+            return terminalRef.current!.writeIn();
+        },
+
+        cancelInput() {
+            terminalRef.current!.cancelInput();
         },
 
         clear() {
@@ -56,10 +68,15 @@ const RunWindow = forwardRef<RuntimeHandle>((_, ref) => {
         },
     };
 
-    useImperativeHandle(ref, () => runtimeHandle);
+    useImperativeHandle(
+        ref,
+        () => runtimeHandle,
+    );
 
     useEffect(() => {
-        runtime.register(runtimeHandle);
+        runtime.register(
+            runtimeHandle,
+        );
     }, []);
 
     return (
@@ -98,7 +115,9 @@ const RunWindow = forwardRef<RuntimeHandle>((_, ref) => {
                 </span>
 
                 <button
-                    onClick={() => setIsOpen(false)}
+                    onClick={() =>
+                        setIsOpen(false)
+                    }
                     className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
                 >
                     ✕
@@ -107,12 +126,15 @@ const RunWindow = forwardRef<RuntimeHandle>((_, ref) => {
 
             {/* Terminal */}
             <div className="min-h-0 flex-1 overflow-hidden">
-                <XtermTerminal ref={terminalRef} />
+                <XtermTerminal
+                    ref={terminalRef}
+                />
             </div>
         </div>
     );
 });
 
-RunWindow.displayName = "RunWindow";
+RunWindow.displayName =
+    "RunWindow";
 
 export default RunWindow;

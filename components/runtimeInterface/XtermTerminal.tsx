@@ -15,122 +15,216 @@ import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@/lib/terminal/types";
 
 const XtermTerminal = forwardRef<Terminal>((_, ref) => {
-    const containerRef = useRef<HTMLDivElement>(null);
+    const containerRef =
+        useRef<HTMLDivElement>(null);
 
-    const terminalRef = useRef<XTerm | null>(null);
+    const terminalRef =
+        useRef<XTerm | null>(null);
 
-    const fitAddonRef = useRef<FitAddon | null>(null);
+    const fitAddonRef =
+        useRef<FitAddon | null>(null);
 
-    const focusedRef = useRef(false);
+    const cancelInputRef =
+        useRef<(() => void) | null>(null);
 
-    useImperativeHandle(ref, () => ({
-        writeOut(
-            stdOut: string,
-            color?: string,
-        ) {
-            if (!terminalRef.current) return;
+    useImperativeHandle(
+        ref,
+        () => ({
+            /* ------------------------------------------------------------------ */
+            /* stdout                                                             */
+            /* ------------------------------------------------------------------ */
 
-            const output =
-                stdOut.endsWith("\r\n")
-                    ? stdOut
-                    : stdOut + "\r\n";
+            writeOut(
+                stdOut: string,
+                color?: string,
+            ) {
+                const terminal =
+                    terminalRef.current;
 
-            if (color) {
-                terminalRef.current.write(
-                    `\x1b[${color}m${output}\x1b[0m`,
+                if (!terminal) {
+                    return;
+                }
+
+                if (color) {
+                    terminal.write(
+                        `\x1b[${color}m${stdOut}\x1b[0m`,
+                    );
+
+                    return;
+                }
+
+                terminal.write(
+                    stdOut,
                 );
+            },
 
-                return;
-            }
+            /* ------------------------------------------------------------------ */
+            /* stderr                                                             */
+            /* ------------------------------------------------------------------ */
 
-            terminalRef.current.write(output);
-        },
+            writeErr(
+                stdErr: string,
+            ) {
+                const terminal =
+                    terminalRef.current;
 
-        writeErr(
-            stdErr: string,
-        ) {
-            if (!terminalRef.current) return;
+                if (!terminal) {
+                    return;
+                }
 
-            const output =
-                stdErr.endsWith("\r\n")
-                    ? stdErr
-                    : stdErr + "\r\n";
+                terminal.write(
+                    `\x1b[31m${stdErr}\x1b[0m`,
+                );
+            },
 
-            terminalRef.current.write(
-                `\x1b[31m${output}\x1b[0m`,
-            );
-        },
+            /* ------------------------------------------------------------------ */
+            /* clear                                                              */
+            /* ------------------------------------------------------------------ */
 
-        clear() {
-            terminalRef.current?.clear();
-        },
+            clear() {
+                terminalRef.current?.clear();
+            },
 
-        async writeIn(
-            placeholder = "",
-        ): Promise<string> {
-            if (!terminalRef.current) {
-                return "";
-            }
+            /* ------------------------------------------------------------------ */
+            /* stdin                                                              */
+            /* ------------------------------------------------------------------ */
 
-            const terminal =
-                terminalRef.current;
+            async writeIn(): Promise<string> {
+                const terminal =
+                    terminalRef.current;
 
-            terminal.write(
-                placeholder,
-            );
+                if (!terminal) {
+                    throw new Error(
+                        "Terminal unavailable.",
+                    );
+                }
 
-            return await new Promise<string>(
-                (resolve) => {
-                    let input = "";
+                /*
+                 * There should only ever be one
+                 * active terminal input session.
+                 */
+                if (
+                    cancelInputRef.current
+                ) {
 
-                    let cursor = 0;
+                    cancelInputRef.current();
+                }
 
-                    const redraw = () => {
-                        terminal.write("\r");
+                return await new Promise<string>(
+                    (
+                        resolve,
+                        reject,
+                    ) => {
+                        let input = "";
+                        let cursor = 0;
+                        let settled = false;
 
-                        terminal.write(
-                            placeholder + input,
-                        );
+                        let disposable:
+                            ReturnType<
+                                XTerm["onData"]
+                            >;
 
-                        terminal.write("\x1b[K");
+                        const finish = (
+                            value: string,
+                        ) => {
+                            if (settled) {
+                                return;
+                            }
 
-                        const moveLeft =
-                            input.length - cursor;
+                            settled = true;
 
-                        if (moveLeft > 0) {
-                            terminal.write(
-                                `\x1b[${moveLeft}D`,
+                            disposable.dispose();
+
+                            cancelInputRef.current =
+                                null;
+
+                            resolve(value);
+                        };
+
+                        const cancel = () => {
+                            if (settled) {
+                                return;
+                            }
+
+                            settled = true;
+
+                            disposable.dispose();
+
+                            cancelInputRef.current =
+                                null;
+
+                            /*
+                             * IMPORTANT:
+                             *
+                             * Cancellation is NOT the same
+                             * thing as the user entering "".
+                             *
+                             * Reject instead of resolving ""
+                             * so the caller cannot accidentally
+                             * send an empty string to Python.
+                             */
+                            reject(
+                                new Error(
+                                    "Terminal input cancelled.",
+                                ),
                             );
-                        }
-                    };
+                        };
 
-                    const disposable =
-                        terminal.onData(
-                            (data) => {
+                        disposable =
+                            terminal.onData(
+                                (data) => {
+                                    if (settled) {
+                                        return;
+                                    }
 
-                                // Ignore key presses until
-                                // the user clicks inside the terminal.
-                                if (!focusedRef.current) {
-                                    return;
-                                }
+                                    /* -------------------------------------------------- */
+                                    /* ENTER                                              */
+                                    /* -------------------------------------------------- */
 
-                                switch (data) {
-
-                                    case "\r":
-
+                                    if (
+                                        data === "\r" ||
+                                        data === "\n"
+                                    ) {
+                                        /*
+                                         * Visually submit the line.
+                                         *
+                                         * The newline is NOT included
+                                         * in the value returned to Python.
+                                         */
                                         terminal.write(
                                             "\r\n",
                                         );
 
-                                        disposable.dispose();
-
-                                        resolve(input);
+                                        finish(
+                                            input,
+                                        );
 
                                         return;
+                                    }
 
-                                    case "\x7f":
+                                    /* -------------------------------------------------- */
+                                    /* CTRL+C                                             */
+                                    /* -------------------------------------------------- */
 
-                                        if (cursor === 0) {
+                                    if (
+                                        data === "\x03"
+                                    ) {
+                                        cancel();
+
+                                        return;
+                                    }
+
+                                    /* -------------------------------------------------- */
+                                    /* BACKSPACE                                          */
+                                    /* -------------------------------------------------- */
+
+                                    if (
+                                        data === "\x7f" ||
+                                        data === "\b"
+                                    ) {
+                                        if (
+                                            cursor === 0
+                                        ) {
                                             return;
                                         }
 
@@ -145,14 +239,49 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
 
                                         cursor--;
 
-                                        redraw();
+                                        terminal.write(
+                                            "\b",
+                                        );
+
+                                        terminal.write(
+                                            input.slice(
+                                                cursor,
+                                            ),
+                                        );
+
+                                        terminal.write(
+                                            " ",
+                                        );
+
+                                        const distance =
+                                            input.length -
+                                            cursor +
+                                            1;
+
+                                        if (
+                                            distance >
+                                            0
+                                        ) {
+                                            terminal.write(
+                                                `\x1b[${distance}D`,
+                                            );
+                                        }
 
                                         return;
+                                    }
 
-                                    case "\x1b[D":
+                                    /* -------------------------------------------------- */
+                                    /* LEFT ARROW                                         */
+                                    /* -------------------------------------------------- */
 
-                                        if (cursor > 0) {
-
+                                    if (
+                                        data ===
+                                        "\x1b[D"
+                                    ) {
+                                        if (
+                                            cursor >
+                                            0
+                                        ) {
                                             cursor--;
 
                                             terminal.write(
@@ -161,14 +290,20 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                                         }
 
                                         return;
+                                    }
 
-                                    case "\x1b[C":
+                                    /* -------------------------------------------------- */
+                                    /* RIGHT ARROW                                        */
+                                    /* -------------------------------------------------- */
 
+                                    if (
+                                        data ===
+                                        "\x1b[C"
+                                    ) {
                                         if (
                                             cursor <
                                             input.length
                                         ) {
-
                                             cursor++;
 
                                             terminal.write(
@@ -177,14 +312,37 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                                         }
 
                                         return;
+                                    }
 
-                                    default:
+                                    /* -------------------------------------------------- */
+                                    /* IGNORE OTHER ESCAPE SEQUENCES                    */
+                                    /* -------------------------------------------------- */
 
+                                    if (
+                                        data.startsWith(
+                                            "\x1b",
+                                        )
+                                    ) {
+                                        return;
+                                    }
+
+                                    /* -------------------------------------------------- */
+                                    /* NORMAL CHARACTER                                  */
+                                    /* -------------------------------------------------- */
+
+                                    for (
+                                        const character of data
+                                    ) {
+                                        /*
+                                         * Ignore control characters.
+                                         */
                                         if (
-                                            data.length !== 1 ||
-                                            data < " "
+                                            character.charCodeAt(
+                                                0,
+                                            ) <
+                                            32
                                         ) {
-                                            return;
+                                            continue;
                                         }
 
                                         input =
@@ -192,41 +350,98 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
                                                 0,
                                                 cursor,
                                             ) +
-                                            data +
+                                            character +
                                             input.slice(
                                                 cursor,
                                             );
 
                                         cursor++;
 
-                                        redraw();
-                                }
-                            },
-                        );
-                },
-            );
-        },
-    }));
+                                        /* ---------------------------------------------- */
+                                        /* Append                                          */
+                                        /* ---------------------------------------------- */
+
+                                        if (
+                                            cursor ===
+                                            input.length
+                                        ) {
+                                            terminal.write(
+                                                character,
+                                            );
+
+                                            continue;
+                                        }
+
+                                        /* ---------------------------------------------- */
+                                        /* Insert into middle                             */
+                                        /* ---------------------------------------------- */
+
+                                        terminal.write(
+                                            input.slice(
+                                                cursor - 1,
+                                            ),
+                                        );
+
+                                        const distance =
+                                            input.length -
+                                            cursor;
+
+                                        if (
+                                            distance >
+                                            0
+                                        ) {
+                                            terminal.write(
+                                                `\x1b[${distance}D`,
+                                            );
+                                        }
+                                    }
+                                },
+                            );
+
+                        cancelInputRef.current =
+                            cancel;
+                    },
+                );
+            },
+
+            /* ------------------------------------------------------------------ */
+            /* cancelInput                                                        */
+            /* ------------------------------------------------------------------ */
+
+            cancelInput() {
+
+                cancelInputRef.current?.();
+            },
+        }),
+        [],
+    );
 
     useEffect(() => {
-
         if (!containerRef.current) {
             return;
         }
 
         const terminal =
-            new XTerm({
-                cursorBlink: true,
+    new XTerm({
+        cursorBlink: true,
 
-                convertEol: true,
+        convertEol: false,
 
-                fontFamily:
-                    '"Cascadia Mono", "Segoe UI Emoji", monospace',
+        fontSize:
+            window.innerWidth < 640
+                ? 12
+                : window.innerWidth < 1024
+                    ? 13
+                    : 14,
 
-                theme: {
-                    background: "#0d1117",
-                },
-            });
+        fontFamily:
+            '"Cascadia Mono", "Segoe UI Emoji", monospace',
+
+        theme: {
+            background:
+                "#0d1117",
+        },
+    });
 
         const fitAddon =
             new FitAddon();
@@ -241,37 +456,28 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
 
         fitAddon.fit();
 
-        // Track whether the terminal currently has focus.
-        containerRef.current.addEventListener(
-            "focusin",
-            () => {
-                focusedRef.current = true;
-            },
-        );
-
-        containerRef.current.addEventListener(
-            "focusout",
-            () => {
-                focusedRef.current = false;
-            },
-        );
+        /* ------------------------------------------------------------------ */
+        /* Clipboard                                                          */
+        /* ------------------------------------------------------------------ */
 
         terminal.attachCustomKeyEventHandler(
             (event) => {
-
                 if (
-                    event.type === "keydown" &&
+                    event.type ===
+                        "keydown" &&
                     event.ctrlKey &&
                     !event.shiftKey &&
-                    event.key.toLowerCase() === "c"
+                    event.key.toLowerCase() ===
+                        "c"
                 ) {
-
                     const selection =
                         terminal.getSelection();
 
-                    if (selection.length > 0) {
-
-                        navigator.clipboard.writeText(
+                    if (
+                        selection.length >
+                        0
+                    ) {
+                        void navigator.clipboard.writeText(
                             selection,
                         );
 
@@ -289,6 +495,10 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
         fitAddonRef.current =
             fitAddon;
 
+        /* ------------------------------------------------------------------ */
+        /* Resize                                                             */
+        /* ------------------------------------------------------------------ */
+
         const resizeObserver =
             new ResizeObserver(() => {
                 fitAddon.fit();
@@ -298,7 +508,16 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
             containerRef.current,
         );
 
+        /* ------------------------------------------------------------------ */
+        /* Cleanup                                                            */
+        /* ------------------------------------------------------------------ */
+
         return () => {
+
+            cancelInputRef.current?.();
+
+            cancelInputRef.current =
+                null;
 
             resizeObserver.disconnect();
 
@@ -310,7 +529,6 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
             fitAddonRef.current =
                 null;
         };
-
     }, []);
 
     return (

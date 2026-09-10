@@ -12,9 +12,9 @@ export interface RuntimeHandle {
         text: string,
     ): void;
 
-    writeIn(
-        placeholder?: string,
-    ): Promise<string>;
+    writeIn(): Promise<string>;
+
+    cancelInput(): void;
 
     clear(): void;
 }
@@ -74,13 +74,20 @@ class Runtime {
 
     /**
      * Reads stdin.
+     *
+     * This method does not render anything.
+     * It simply waits for the user's input.
      */
-    writeIn(
-        placeholder?: string,
-    ): Promise<string> {
-        return this.runWindow!.writeIn(
-            placeholder,
-        );
+    writeIn(): Promise<string> {
+        return this.runWindow!.writeIn();
+    }
+
+    /**
+     * Cancels the currently active stdin
+     * request, if one exists.
+     */
+    cancelInput() {
+        this.runWindow!.cancelInput();
     }
 
     /**
@@ -91,6 +98,7 @@ class Runtime {
     }
 }
 
-const runtime = new Runtime();
+const runtime =
+    new Runtime();
 
 export default runtime;

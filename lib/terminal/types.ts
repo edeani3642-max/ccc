@@ -17,14 +17,16 @@ export interface Terminal {
     ): void;
 
     /**
-     * Displays an optional placeholder and waits for user input.
-     *
-     * Example:
-     * const name = await terminal.writeIn("Name: ");
+     * Waits for user input and resolves with the
+     * submitted value.
      */
-    writeIn(
-        placeholder?: string,
-    ): Promise<string>;
+    writeIn(): Promise<string>;
+
+    /**
+     * Cancels the currently active input request,
+     * if one exists.
+     */
+    cancelInput(): void;
 
     /**
      * Clears all terminal output.
