@@ -38,9 +38,31 @@ let stdinBytes:
 function terminalText(
     text: string,
 ): string {
+    return text
+        .replace(
+            /\r\n/g,
+            "\n",
+        )
+        .replace(
+            /\r/g,
+            "\n",
+        )
+        .replace(
+            /\n/g,
+            "\r\n",
+        );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Python error formatting                                                    */
+/* -------------------------------------------------------------------------- */
+
+function cleanPythonError(
+    text: string,
+): string {
     return text.replace(
-        /\r?\n/g,
-        "\r\n",
+        /[ \t]{20,}/g,
+        "    ",
     );
 }
 
@@ -121,6 +143,8 @@ function destroyWorker(): void {
     stdinBuffer = null;
     stdinState = null;
     stdinBytes = null;
+
+    runtime.clear();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -130,19 +154,11 @@ function destroyWorker(): void {
 async function handleStdin(
     worker: Worker,
 ): Promise<void> {
-    console.log(
-        "[python.ts] stdin-request received",
-    );
-
     if (
         worker !== pythonWorker ||
         !stdinState ||
         !stdinBytes
     ) {
-        console.log(
-            "[python.ts] stdin request rejected: stale worker/channel",
-        );
-
         return;
     }
 
@@ -153,25 +169,12 @@ async function handleStdin(
         stdinBytes;
 
     try {
-        console.log(
-            "[python.ts] waiting for terminal input",
-        );
-
         const value =
             await runtime.writeIn();
-
-        console.log(
-            "[python.ts] input promise fulfilled:",
-            JSON.stringify(value),
-        );
 
         if (
             worker !== pythonWorker
         ) {
-            console.log(
-                "[python.ts] worker became obsolete",
-            );
-
             return;
         }
 
@@ -179,16 +182,6 @@ async function handleStdin(
             textEncoder.encode(
                 value,
             );
-
-        console.log(
-            "[python.ts] encoded input:",
-            {
-                value:
-                    JSON.stringify(value),
-                byteLength:
-                    encoded.length,
-            },
-        );
 
         if (
             encoded.length >
@@ -209,10 +202,6 @@ async function handleStdin(
             encoded,
         );
 
-        console.log(
-            "[python.ts] stdin buffer written",
-        );
-
         Atomics.store(
             state,
             1,
@@ -225,35 +214,12 @@ async function handleStdin(
             STDIN_READY,
         );
 
-        console.log(
-            "[python.ts] notifying worker:",
-            {
-                status:
-                    Atomics.load(
-                        state,
-                        0,
-                    ),
-                length:
-                    Atomics.load(
-                        state,
-                        1,
-                    ),
-            },
-        );
-
         Atomics.notify(
             state,
             0,
         );
-
-        console.log(
-            "[python.ts] stdin fulfillment sent to worker",
-        );
-    } catch (error) {
-        console.log(
-            "[python.ts] stdin promise rejected:",
-            error,
-        );
+    } catch {
+        // Input was cancelled.
     }
 }
 
@@ -270,10 +236,8 @@ export async function runPython(
     destroyWorker();
 
     runtime.open(
-        "Python Runtime",
+        "Python",
     );
-
-    runtime.clear();
 
     try {
         const buffer =
@@ -368,8 +332,10 @@ export async function runPython(
                 case "stderr": {
                     runtime.writeErr(
                         terminalText(
-                            String(
-                                data.text ?? "",
+                            cleanPythonError(
+                                String(
+                                    data.text ?? "",
+                                ),
                             ),
                         ),
                     );
@@ -433,9 +399,13 @@ export async function runPython(
                     runtime.cancelInput();
 
                     runtime.writeErr(
-                        String(
-                            data.message ??
-                                "Unknown Python error.",
+                        terminalText(
+                            cleanPythonError(
+                                String(
+                                    data.message ??
+                                        "Unknown Python error.",
+                                ),
+                            ),
                         ),
                     );
 

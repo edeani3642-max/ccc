@@ -82,7 +82,7 @@ const XtermTerminal = forwardRef<Terminal>((_, ref) => {
             /* ------------------------------------------------------------------ */
 
             clear() {
-                terminalRef.current?.clear();
+                terminalRef.current?.reset();
             },
 
             /* ------------------------------------------------------------------ */

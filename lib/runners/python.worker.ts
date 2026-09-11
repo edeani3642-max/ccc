@@ -84,7 +84,6 @@ function send(
 /* -------------------------------------------------------------------------- */
 
 function readStdin(): string {
-
     if (
         !stdinState ||
         !stdinBytes
@@ -219,14 +218,11 @@ async function runPython(
 
     pyodide.setStdout({
         raw(charCode) {
-            const byte =
-                new Uint8Array([
-                    charCode,
-                ]);
-
             const text =
                 stdoutDecoder.decode(
-                    byte,
+                    new Uint8Array([
+                        charCode,
+                    ]),
                     {
                         stream: true,
                     },
@@ -247,14 +243,11 @@ async function runPython(
 
     pyodide.setStderr({
         raw(charCode) {
-            const byte =
-                new Uint8Array([
-                    charCode,
-                ]);
-
             const text =
                 stderrDecoder.decode(
-                    byte,
+                    new Uint8Array([
+                        charCode,
+                    ]),
                     {
                         stream: true,
                     },
