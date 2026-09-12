@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import RunWindow from "@/components/runtimeInterface/RunWindow";
 import "./globals.css";
 import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
+import AppUpdateListener from "@/components/AppUpdateListener";
 
 const geistSans = Geist({
     variable: "--font-geist-sans",

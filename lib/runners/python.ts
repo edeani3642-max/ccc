@@ -6,30 +6,7 @@ import runtime from "@/lib/runtime/RunTime";
 
 let pythonWorker: Worker | null = null;
 
-/* -------------------------------------------------------------------------- */
-/* Stdin                                                                      */
-/* -------------------------------------------------------------------------- */
-
-const STDIN_BUFFER_SIZE =
-    64 * 1024;
-
-const STDIN_WAITING = 0;
-const STDIN_READY = 1;
-
-const textEncoder =
-    new TextEncoder();
-
-let stdinBuffer:
-    SharedArrayBuffer | null =
-    null;
-
-let stdinState:
-    Int32Array | null =
-    null;
-
-let stdinBytes:
-    Uint8Array | null =
-    null;
+let runActive = false;
 
 /* -------------------------------------------------------------------------- */
 /* Terminal text                                                              */
@@ -67,8 +44,30 @@ function cleanPythonError(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Create stdin buffer                                                        */
+/* Stdin                                                                      */
 /* -------------------------------------------------------------------------- */
+
+const STDIN_BUFFER_SIZE =
+    64 * 1024;
+
+const STDIN_WAITING = 0;
+const STDIN_READY = 1;
+const STDIN_CANCELLED = 2;
+
+const textEncoder =
+    new TextEncoder();
+
+let stdinBuffer:
+    SharedArrayBuffer | null =
+    null;
+
+let stdinState:
+    Int32Array | null =
+    null;
+
+let stdinBytes:
+    Uint8Array | null =
+    null;
 
 function createStdinBuffer(): SharedArrayBuffer {
     if (
@@ -118,31 +117,120 @@ function createStdinBuffer(): SharedArrayBuffer {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Destroy worker                                                             */
+/* Interrupt                                                                  */
 /* -------------------------------------------------------------------------- */
 
-function destroyWorker(): void {
+const INTERRUPT_BUFFER_SIZE = 4;
+
+const INTERRUPT_NONE = 0;
+const INTERRUPT_SIGNAL = 2;
+
+let interruptBuffer:
+    SharedArrayBuffer | null =
+    null;
+
+let interruptState:
+    Int32Array | null =
+    null;
+
+function createInterruptBuffer(): SharedArrayBuffer {
+    if (
+        typeof SharedArrayBuffer ===
+        "undefined"
+    ) {
+        throw new Error(
+            "SharedArrayBuffer is unavailable. " +
+            "Cross-origin isolation is required.",
+        );
+    }
+
+    const buffer =
+        new SharedArrayBuffer(
+            INTERRUPT_BUFFER_SIZE,
+        );
+
+    interruptBuffer =
+        buffer;
+
+    interruptState =
+        new Int32Array(
+            buffer,
+        );
+
+    Atomics.store(
+        interruptState,
+        0,
+        INTERRUPT_NONE,
+    );
+
+    return buffer;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Stop current process                                                       */
+/* -------------------------------------------------------------------------- */
+
+function interruptPython(): void {
+    if (!runActive) {
+        return;
+    }
+
     /*
-     * Stop the terminal from waiting for input.
+     * If Python is currently waiting for input,
+     * release the blocking Atomics.wait().
+     */
+    if (stdinState) {
+        Atomics.store(
+            stdinState,
+            0,
+            STDIN_CANCELLED,
+        );
+
+        Atomics.notify(
+            stdinState,
+            0,
+        );
+    }
+
+    /*
+     * Cancel the terminal's pending input promise.
      */
     runtime.cancelInput();
 
     /*
-     * Terminating the worker is the actual
-     * cancellation of Python execution.
+     * Send SIGINT (2) to Pyodide.
+     * This is the actual keyboard interrupt.
      */
+    if (interruptState) {
+        Atomics.store(
+            interruptState,
+            0,
+            INTERRUPT_SIGNAL,
+        );
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Destroy worker                                                             */
+/* -------------------------------------------------------------------------- */
+
+function destroyWorker(): void {
+    runtime.cancelInput();
+
     if (pythonWorker) {
         pythonWorker.terminate();
+
         pythonWorker = null;
     }
 
-    /*
-     * Release references to the old stdin
-     * communication channel.
-     */
+    runActive = false;
+
     stdinBuffer = null;
     stdinState = null;
     stdinBytes = null;
+
+    interruptBuffer = null;
+    interruptState = null;
 
     runtime.clear();
 }
@@ -173,7 +261,8 @@ async function handleStdin(
             await runtime.writeIn();
 
         if (
-            worker !== pythonWorker
+            worker !== pythonWorker ||
+            !runActive
         ) {
             return;
         }
@@ -224,6 +313,257 @@ async function handleStdin(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Create worker                                                              */
+/* -------------------------------------------------------------------------- */
+
+function createWorker(): Worker {
+    if (pythonWorker) {
+        return pythonWorker;
+    }
+
+    const worker =
+        new Worker(
+            new URL(
+                "./python.worker.ts",
+                import.meta.url,
+            ),
+        );
+
+    pythonWorker =
+        worker;
+
+    /* ---------------------------------------------------------------------- */
+    /* Worker messages                                                         */
+    /* ---------------------------------------------------------------------- */
+
+    worker.onmessage = (
+        event: MessageEvent,
+    ) => {
+        if (
+            worker !== pythonWorker
+        ) {
+            return;
+        }
+
+        const data =
+            event.data;
+
+        if (!data) {
+            return;
+        }
+
+        switch (data.type) {
+            /* ---------------------------------------------------------------- */
+            /* Initializing                                                      */
+            /* ---------------------------------------------------------------- */
+
+            case "initializing": {
+                runtime.writeOut(
+                    terminalText(
+                        "[System] Initializing Python Runtime...\n",
+                    ),
+                    "90",
+                );
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* Ready                                                             */
+            /* ---------------------------------------------------------------- */
+
+            case "ready": {
+                runtime.writeOut(
+                    terminalText(
+                        "[System] Running program...\n",
+                    ),
+                    "90",
+                );
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* stdout                                                            */
+            /* ---------------------------------------------------------------- */
+
+            case "stdout": {
+                runtime.writeOut(
+                    terminalText(
+                        String(
+                            data.text ?? "",
+                        ),
+                    ),
+                );
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* stderr                                                            */
+            /* ---------------------------------------------------------------- */
+
+            case "stderr": {
+                runtime.writeErr(
+                    terminalText(
+                        cleanPythonError(
+                            String(
+                                data.text ?? "",
+                            ),
+                        ),
+                    ),
+                );
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* stdin                                                             */
+            /* ---------------------------------------------------------------- */
+
+            case "stdin-request": {
+                void handleStdin(
+                    worker,
+                );
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* Finished                                                          */
+            /* ---------------------------------------------------------------- */
+
+            case "done": {
+                runActive = false;
+
+                runtime.cancelInput();
+
+                stdinBuffer = null;
+                stdinState = null;
+                stdinBytes = null;
+
+                if (
+                    interruptState
+                ) {
+                    Atomics.store(
+                        interruptState,
+                        0,
+                        INTERRUPT_NONE,
+                    );
+                }
+
+                runtime.writeOut(
+                    terminalText(
+                        "\n[System] Program Finished\n",
+                    ),
+                    "90",
+                );
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* Cancelled                                                        */
+            /* ---------------------------------------------------------------- */
+
+            case "cancelled": {
+                runActive = false;
+
+                runtime.cancelInput();
+
+                stdinBuffer = null;
+                stdinState = null;
+                stdinBytes = null;
+
+                if (
+                    interruptState
+                ) {
+                    Atomics.store(
+                        interruptState,
+                        0,
+                        INTERRUPT_NONE,
+                    );
+                }
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* Error                                                             */
+            /* ---------------------------------------------------------------- */
+
+            case "error": {
+                runActive = false;
+
+                runtime.cancelInput();
+
+                stdinBuffer = null;
+                stdinState = null;
+                stdinBytes = null;
+
+                if (
+                    interruptState
+                ) {
+                    Atomics.store(
+                        interruptState,
+                        0,
+                        INTERRUPT_NONE,
+                    );
+                }
+
+                runtime.writeErr(
+                    terminalText(
+                        cleanPythonError(
+                            String(
+                                data.message ??
+                                "Unknown Python error.",
+                            ),
+                        ),
+                    ),
+                );
+
+                break;
+            }
+        }
+    };
+
+    /* ---------------------------------------------------------------------- */
+    /* Worker error                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    worker.onerror = (
+        event: ErrorEvent,
+    ) => {
+        if (
+            worker !== pythonWorker
+        ) {
+            return;
+        }
+
+        runtime.cancelInput();
+
+        runtime.writeErr(
+            event.message ||
+            "Python worker failed.",
+        );
+
+        worker.terminate();
+
+        pythonWorker = null;
+        runActive = false;
+
+        stdinBuffer = null;
+        stdinState = null;
+        stdinBytes = null;
+
+        interruptBuffer = null;
+        interruptState = null;
+    };
+
+    return worker;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Run Python                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -231,9 +571,52 @@ export async function runPython(
     code: string,
 ): Promise<void> {
     /*
-     * Every execution gets a completely new worker.
+     * If a program is already running,
+     * interrupt it first.
+     *
+     * The interrupt must happen before
+     * waiting for the old execution to finish,
+     * otherwise infinite loops cannot be stopped.
      */
-    destroyWorker();
+    if (runActive) {
+        interruptPython();
+
+        /*
+         * Show that the previous execution
+         * has been stopped.
+         */
+        runtime.writeOut(
+            terminalText(
+                "\n[System] Program Finished\n",
+            ),
+            "90",
+        );
+
+        /*
+         * Wait until the old execution has
+         * completely unwound before starting
+         * the new one.
+         */
+        await new Promise<void>(
+            (resolve) => {
+                const check =
+                    () => {
+                        if (!runActive) {
+                            resolve();
+
+                            return;
+                        }
+
+                        setTimeout(
+                            check,
+                            10,
+                        );
+                    };
+
+                check();
+            },
+        );
+    }
 
     runtime.open(
         "Python",
@@ -243,243 +626,30 @@ export async function runPython(
         const buffer =
             createStdinBuffer();
 
+        if (!interruptBuffer) {
+            createInterruptBuffer();
+        }
+
+        if (interruptState) {
+            Atomics.store(
+                interruptState,
+                0,
+                INTERRUPT_NONE,
+            );
+        }
+
         const worker =
-            new Worker(
-                new URL(
-                    "./python.worker.ts",
-                    import.meta.url,
-                ),
-            );
+            createWorker();
 
-        pythonWorker =
-            worker;
-
-        /* ------------------------------------------------------------------ */
-        /* Worker messages                                                     */
-        /* ------------------------------------------------------------------ */
-
-        worker.onmessage = (
-            event: MessageEvent,
-        ) => {
-            /*
-             * Ignore anything coming from a worker
-             * that has already been replaced.
-             */
-            if (
-                worker !== pythonWorker
-            ) {
-                return;
-            }
-
-            const data =
-                event.data;
-
-            if (!data) {
-                return;
-            }
-
-            switch (data.type) {
-                /* ---------------------------------------------------------- */
-                /* Initializing                                                */
-                /* ---------------------------------------------------------- */
-
-                case "initializing": {
-                    runtime.writeOut(
-                        terminalText(
-                            "[System] Initializing Python Runtime...\n",
-                        ),
-                        "90",
-                    );
-
-                    break;
-                }
-
-                /* ---------------------------------------------------------- */
-                /* Ready                                                       */
-                /* ---------------------------------------------------------- */
-
-                case "ready": {
-                    runtime.writeOut(
-                        terminalText(
-                            "[System] Ready\n",
-                        ),
-                        "90",
-                    );
-
-                    break;
-                }
-
-                /* ---------------------------------------------------------- */
-                /* stdout                                                      */
-                /* ---------------------------------------------------------- */
-
-                case "stdout": {
-                    runtime.writeOut(
-                        terminalText(
-                            String(
-                                data.text ?? "",
-                            ),
-                        ),
-                    );
-
-                    break;
-                }
-
-                /* ---------------------------------------------------------- */
-                /* stderr                                                      */
-                /* ---------------------------------------------------------- */
-
-                case "stderr": {
-                    runtime.writeErr(
-                        terminalText(
-                            cleanPythonError(
-                                String(
-                                    data.text ?? "",
-                                ),
-                            ),
-                        ),
-                    );
-
-                    break;
-                }
-
-                /* ---------------------------------------------------------- */
-                /* stdin                                                       */
-                /* ---------------------------------------------------------- */
-
-                case "stdin-request": {
-                    void handleStdin(
-                        worker,
-                    );
-
-                    break;
-                }
-
-                /* ---------------------------------------------------------- */
-                /* Finished                                                    */
-                /* ---------------------------------------------------------- */
-
-                case "done": {
-                    runtime.cancelInput();
-
-                    if (
-                        worker ===
-                        pythonWorker
-                    ) {
-                        worker.terminate();
-
-                        pythonWorker =
-                            null;
-
-                        stdinBuffer =
-                            null;
-
-                        stdinState =
-                            null;
-
-                        stdinBytes =
-                            null;
-                    }
-
-                    runtime.writeOut(
-                        terminalText(
-                            "[System] Program Finished\n",
-                        ),
-                        "90",
-                    );
-
-                    break;
-                }
-
-                /* ---------------------------------------------------------- */
-                /* Error                                                       */
-                /* ---------------------------------------------------------- */
-
-                case "error": {
-                    runtime.cancelInput();
-
-                    runtime.writeErr(
-                        terminalText(
-                            cleanPythonError(
-                                String(
-                                    data.message ??
-                                        "Unknown Python error.",
-                                ),
-                            ),
-                        ),
-                    );
-
-                    if (
-                        worker ===
-                        pythonWorker
-                    ) {
-                        worker.terminate();
-
-                        pythonWorker =
-                            null;
-
-                        stdinBuffer =
-                            null;
-
-                        stdinState =
-                            null;
-
-                        stdinBytes =
-                            null;
-                    }
-
-                    break;
-                }
-            }
-        };
-
-        /* ------------------------------------------------------------------ */
-        /* Worker error                                                       */
-        /* ------------------------------------------------------------------ */
-
-        worker.onerror = (
-            event: ErrorEvent,
-        ) => {
-            /*
-             * Ignore errors from an obsolete worker.
-             */
-            if (
-                worker !== pythonWorker
-            ) {
-                return;
-            }
-
-            runtime.cancelInput();
-
-            runtime.writeErr(
-                event.message ||
-                    "Python worker failed.",
-            );
-
-            worker.terminate();
-
-            pythonWorker =
-                null;
-
-            stdinBuffer =
-                null;
-
-            stdinState =
-                null;
-
-            stdinBytes =
-                null;
-        };
-
-        /* ------------------------------------------------------------------ */
-        /* Start execution                                                    */
-        /* ------------------------------------------------------------------ */
+        runActive = true;
 
         worker.postMessage({
             type: "run",
             code,
             stdinBuffer:
                 buffer,
+            interruptBuffer:
+                interruptBuffer,
         });
     } catch (error) {
         destroyWorker();

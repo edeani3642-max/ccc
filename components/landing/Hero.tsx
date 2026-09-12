@@ -1,78 +1,7 @@
 "use client";
 
 import { useState } from "react";
-
-function StartCodingModal({
-    onClose,
-}: {
-    onClose: () => void;
-}) {
-    return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-            onMouseDown={(event) => {
-                if (event.target === event.currentTarget) {
-                    onClose();
-                }
-            }}
-        >
-            <div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="start-coding-title"
-                className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950 p-6 text-white shadow-2xl"
-            >
-                <div className="mb-5 flex items-start justify-between gap-6">
-                    <div>
-                        <p className="mb-2 text-sm font-medium text-emerald-400">
-                            Coming soon
-                        </p>
-
-                        <h2
-                            id="start-coding-title"
-                            className="text-2xl font-semibold tracking-tight"
-                        >
-                            Almost there!
-                        </h2>
-                    </div>
-
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        aria-label="Close"
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xl text-zinc-500 transition hover:bg-white/5 hover:text-white"
-                    >
-                        ×
-                    </button>
-                </div>
-
-                <p className="leading-7 text-zinc-300">
-                    The CampusCodeCamp coding environment will be
-                    activated on{" "}
-                    <strong className="font-medium text-white">
-                        Saturday, September 12
-                    </strong>
-                    .
-                </p>
-
-                <p className="mt-3 leading-7 text-zinc-400">
-                    We're getting everything ready for you. If you
-                    can, endeavor to attend the free Python class on
-                    Saturday and get your first experience with
-                    CampusCodeCamp.
-                </p>
-
-                <button
-                    type="button"
-                    onClick={onClose}
-                    className="mt-6 w-full rounded-xl bg-white px-5 py-3.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-                >
-                    Got it
-                </button>
-            </div>
-        </div>
-    );
-}
+import Link from "next/link";
 
 export default function Hero() {
     const [showStartCodingModal, setShowStartCodingModal] =
@@ -141,27 +70,16 @@ export default function Hero() {
                                 </span>
                             </a>
 
-                            <button
-                                type="button"
-                                onClick={() =>
-                                    setShowStartCodingModal(true)
-                                }
+                            <Link
+                                href={"/ide"}
                                 className="w-full rounded-lg border border-white/20 bg-white/10 px-4 py-2.5 text-xs font-semibold text-white backdrop-blur transition hover:bg-white/15 sm:w-auto sm:px-6 sm:py-4 sm:text-sm"
                             >
                                 Start coding
-                            </button>
+                            </Link>
                         </div>
                     </div>
                 </div>
             </section>
-
-            {showStartCodingModal && (
-                <StartCodingModal
-                    onClose={() =>
-                        setShowStartCodingModal(false)
-                    }
-                />
-            )}
         </>
     );
 }

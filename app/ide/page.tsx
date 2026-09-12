@@ -26,13 +26,15 @@ export default function IDEPage() {
             {/* -------------------------------------------------------------- */}
 
             <header className="flex h-12 items-center border-b border-[#30363d] bg-[#161b22] px-4">
-                <div className="flex items-center gap-2 text-sm">
-                    <span className="text-[#8b949e]">
-                        IDE
-                    </span>
+                <div className="flex items-center gap-2 text-sm rounded">
+                    <Link
+                     href={"/#"}
+                     className="text-[#8b949e]">
+                        ←
+                    </Link>
 
                     <span className="text-[#484f58]">
-                        /
+                        |
                     </span>
 
                     <span className="text-[#e6edf3]">

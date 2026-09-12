@@ -1,13 +1,32 @@
+// Worker
+
 type RunMessage = {
     type: "run";
     code: string;
     stdinBuffer: SharedArrayBuffer;
+    interruptBuffer: SharedArrayBuffer;
+};
+
+type PyProxy = {
+    destroy(): void;
 };
 
 type Pyodide = {
+    runPython(
+        code: string,
+    ): PyProxy;
+
     runPythonAsync(
         code: string,
+        options?: {
+            globals?: PyProxy;
+            locals?: PyProxy;
+        },
     ): Promise<unknown>;
+
+    setInterruptBuffer(
+        buffer: Int32Array,
+    ): void;
 
     setStdin(options: {
         stdin: () => string | undefined;
@@ -44,11 +63,22 @@ declare function importScripts(
 ): void;
 
 /* -------------------------------------------------------------------------- */
+/* Pyodide                                                                     */
+/* -------------------------------------------------------------------------- */
+
+let pyodide:
+    Pyodide | null = null;
+
+let pyodideLoading:
+    Promise<Pyodide> | null = null;
+
+/* -------------------------------------------------------------------------- */
 /* Stdin                                                                      */
 /* -------------------------------------------------------------------------- */
 
 const STDIN_WAITING = 0;
 const STDIN_READY = 1;
+const STDIN_CANCELLED = 2;
 
 let stdinState:
     Int32Array | null = null;
@@ -56,8 +86,20 @@ let stdinState:
 let stdinBytes:
     Uint8Array | null = null;
 
+let stdinCancelled = false;
+
 const decoder =
     new TextDecoder();
+
+/* -------------------------------------------------------------------------- */
+/* Interrupt                                                                  */
+/* -------------------------------------------------------------------------- */
+
+const INTERRUPT_NONE = 0;
+const INTERRUPT_SIGNAL = 2;
+
+let interruptState:
+    Int32Array | null = null;
 
 /* -------------------------------------------------------------------------- */
 /* Output decoding                                                            */
@@ -113,17 +155,29 @@ function readStdin(): string {
             0,
         );
 
-    const length =
-        Atomics.load(
-            state,
-            1,
-        );
+    /*
+     * The current execution was cancelled
+     * while waiting for input.
+     */
+    if (
+        status === STDIN_CANCELLED
+    ) {
+        stdinCancelled = true;
+
+        return "";
+    }
 
     if (
         status !== STDIN_READY
     ) {
         return "";
     }
+
+    const length =
+        Atomics.load(
+            state,
+            1,
+        );
 
     const copiedBytes =
         new Uint8Array(
@@ -162,13 +216,86 @@ function readStdin(): string {
 /* -------------------------------------------------------------------------- */
 
 async function loadPython(): Promise<Pyodide> {
-    importScripts(
-        "/pyodide/pyodide.js",
-    );
+    if (pyodide) {
+        return pyodide;
+    }
 
-    return await loadPyodide({
-        indexURL:
-            "/pyodide/",
+    if (pyodideLoading) {
+        return pyodideLoading;
+    }
+
+    pyodideLoading =
+        (async () => {
+            importScripts(
+                "/pyodide/pyodide.js",
+            );
+
+            const instance =
+                await loadPyodide({
+                    indexURL:
+                        "/pyodide/",
+                });
+
+            pyodide =
+                instance;
+
+            return instance;
+        })();
+
+    try {
+        return await pyodideLoading;
+    } finally {
+        pyodideLoading = null;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Configure output                                                            */
+/* -------------------------------------------------------------------------- */
+
+function configureOutput(
+    instance: Pyodide,
+): void {
+    instance.setStdout({
+        raw(charCode) {
+            const text =
+                stdoutDecoder.decode(
+                    new Uint8Array([
+                        charCode,
+                    ]),
+                    {
+                        stream: true,
+                    },
+                );
+
+            if (text) {
+                send({
+                    type: "stdout",
+                    text,
+                });
+            }
+        },
+    });
+
+    instance.setStderr({
+        raw(charCode) {
+            const text =
+                stderrDecoder.decode(
+                    new Uint8Array([
+                        charCode,
+                    ]),
+                    {
+                        stream: true,
+                    },
+                );
+
+            if (text) {
+                send({
+                    type: "stderr",
+                    text,
+                });
+            }
+        },
     });
 }
 
@@ -179,7 +306,10 @@ async function loadPython(): Promise<Pyodide> {
 async function runPython(
     code: string,
     buffer: SharedArrayBuffer,
+    interruptBuffer: SharedArrayBuffer,
 ): Promise<void> {
+    stdinCancelled = false;
+
     stdinState =
         new Int32Array(
             buffer,
@@ -205,107 +335,162 @@ async function runPython(
         0,
     );
 
-    send({
-        type: "initializing",
-    });
+    /* ---------------------------------------------------------------------- */
+    /* Interrupt buffer                                                       */
+    /* ---------------------------------------------------------------------- */
 
-    const pyodide =
+    interruptState =
+        new Int32Array(
+            interruptBuffer,
+        );
+
+    Atomics.store(
+        interruptState,
+        0,
+        INTERRUPT_NONE,
+    );
+
+    /* ---------------------------------------------------------------------- */
+    /* Load Pyodide                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    const wasLoaded =
+        pyodide !== null;
+
+    if (!wasLoaded) {
+        send({
+            type: "initializing",
+        });
+    }
+
+    const instance =
         await loadPython();
 
     /* ---------------------------------------------------------------------- */
-    /* stdout                                                                 */
+    /* Configure output                                                       */
     /* ---------------------------------------------------------------------- */
 
-    pyodide.setStdout({
-        raw(charCode) {
-            const text =
-                stdoutDecoder.decode(
-                    new Uint8Array([
-                        charCode,
-                    ]),
-                    {
-                        stream: true,
-                    },
-                );
-
-            if (text) {
-                send({
-                    type: "stdout",
-                    text,
-                });
-            }
-        },
-    });
+    if (!wasLoaded) {
+        configureOutput(
+            instance,
+        );
+    }
 
     /* ---------------------------------------------------------------------- */
-    /* stderr                                                                 */
+    /* Configure interrupt                                                    */
     /* ---------------------------------------------------------------------- */
 
-    pyodide.setStderr({
-        raw(charCode) {
-            const text =
-                stderrDecoder.decode(
-                    new Uint8Array([
-                        charCode,
-                    ]),
-                    {
-                        stream: true,
-                    },
-                );
-
-            if (text) {
-                send({
-                    type: "stderr",
-                    text,
-                });
-            }
-        },
-    });
+    instance.setInterruptBuffer(
+        interruptState,
+    );
 
     /* ---------------------------------------------------------------------- */
-    /* stdin                                                                  */
+    /* Configure stdin                                                        */
     /* ---------------------------------------------------------------------- */
 
-    pyodide.setStdin({
+    instance.setStdin({
         stdin: readStdin,
         autoEOF: true,
     });
 
-    send({
-        type: "ready",
-    });
-
-    await pyodide.runPythonAsync(
-        code,
-    );
-
     /* ---------------------------------------------------------------------- */
-    /* Flush output                                                           */
+    /* Fresh namespace                                                        */
     /* ---------------------------------------------------------------------- */
 
-    const remainingStdout =
-        stdoutDecoder.decode();
+    const namespace =
+        instance.runPython(
+            "{}",
+        );
 
-    if (remainingStdout) {
+    try {
         send({
-            type: "stdout",
-            text: remainingStdout,
+            type: "ready",
         });
-    }
 
-    const remainingStderr =
-        stderrDecoder.decode();
+        await instance.runPythonAsync(
+            code,
+            {
+                globals:
+                    namespace,
 
-    if (remainingStderr) {
+                locals:
+                    namespace,
+            },
+        );
+
+        /*
+         * If the stdin mechanism was cancelled,
+         * this execution must not be considered
+         * a normal successful execution.
+         */
+        if (
+            stdinCancelled
+        ) {
+            send({
+                type: "cancelled",
+            });
+
+            return;
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Flush output                                                       */
+        /* ------------------------------------------------------------------ */
+
+        const remainingStdout =
+            stdoutDecoder.decode();
+
+        if (remainingStdout) {
+            send({
+                type: "stdout",
+                text: remainingStdout,
+            });
+        }
+
+        const remainingStderr =
+            stderrDecoder.decode();
+
+        if (remainingStderr) {
+            send({
+                type: "stderr",
+                text: remainingStderr,
+            });
+        }
+
         send({
-            type: "stderr",
-            text: remainingStderr,
+            type: "done",
         });
-    }
+    } catch (error) {
+        /*
+         * input() throws EOFError when our cancellation
+         * wakes readStdin() and it returns an empty string.
+         *
+         * Treat that as cancellation instead of exposing
+         * it as a Python runtime error.
+         */
+        if (
+            stdinCancelled
+        ) {
+            send({
+                type: "cancelled",
+            });
 
-    send({
-        type: "done",
-    });
+            return;
+        }
+
+        throw error;
+    } finally {
+        /*
+         * Destroy only this execution's namespace.
+         *
+         * Pyodide itself remains alive.
+         */
+        namespace.destroy();
+
+        stdinState = null;
+        stdinBytes = null;
+        interruptState = null;
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -329,6 +514,7 @@ self.onmessage = async (
         await runPython(
             data.code,
             data.stdinBuffer,
+            data.interruptBuffer,
         );
     } catch (error) {
         send({
@@ -338,8 +524,5 @@ self.onmessage = async (
                     ? error.message
                     : String(error),
         });
-    } finally {
-        stdinState = null;
-        stdinBytes = null;
     }
 };
