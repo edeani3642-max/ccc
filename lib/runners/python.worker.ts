@@ -1,11 +1,15 @@
 // Worker
 
-type RunMessage = {
-    type: "run";
-    code: string;
-    stdinBuffer: SharedArrayBuffer;
-    interruptBuffer: SharedArrayBuffer;
-};
+type WorkerMessage =
+    | {
+          type: "initialize";
+      }
+    | {
+          type: "run";
+          code: string;
+          stdinBuffer: SharedArrayBuffer;
+          interruptBuffer: SharedArrayBuffer;
+      };
 
 type PyProxy = {
     destroy(): void;
@@ -63,7 +67,7 @@ declare function importScripts(
 ): void;
 
 /* -------------------------------------------------------------------------- */
-/* Pyodide                                                                     */
+/* Pyodide                                                                    */
 /* -------------------------------------------------------------------------- */
 
 let pyodide:
@@ -71,6 +75,8 @@ let pyodide:
 
 let pyodideLoading:
     Promise<Pyodide> | null = null;
+
+let outputConfigured = false;
 
 /* -------------------------------------------------------------------------- */
 /* Stdin                                                                      */
@@ -250,12 +256,16 @@ async function loadPython(): Promise<Pyodide> {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Configure output                                                            */
+/* Configure output                                                           */
 /* -------------------------------------------------------------------------- */
 
 function configureOutput(
     instance: Pyodide,
 ): void {
+    if (outputConfigured) {
+        return;
+    }
+
     instance.setStdout({
         raw(charCode) {
             const text =
@@ -296,6 +306,40 @@ function configureOutput(
                 });
             }
         },
+    });
+
+    outputConfigured = true;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Initialize Python                                                          */
+/* -------------------------------------------------------------------------- */
+
+async function initializePython(): Promise<void> {
+    /*
+     * Pyodide has already been loaded.
+     */
+    if (pyodide) {
+        send({
+            type: "initialized",
+        });
+
+        return;
+    }
+
+    send({
+        type: "initializing",
+    });
+
+    const instance =
+        await loadPython();
+
+    configureOutput(
+        instance,
+    );
+
+    send({
+        type: "initialized",
     });
 }
 
@@ -351,30 +395,22 @@ async function runPython(
     );
 
     /* ---------------------------------------------------------------------- */
-    /* Load Pyodide                                                           */
+    /* Load / reuse Pyodide                                                   */
     /* ---------------------------------------------------------------------- */
-
-    const wasLoaded =
-        pyodide !== null;
-
-    if (!wasLoaded) {
-        send({
-            type: "initializing",
-        });
-    }
 
     const instance =
         await loadPython();
 
-    /* ---------------------------------------------------------------------- */
-    /* Configure output                                                       */
-    /* ---------------------------------------------------------------------- */
-
-    if (!wasLoaded) {
-        configureOutput(
-            instance,
-        );
-    }
+    /*
+     * This is normally already configured by
+     * initializePython().
+     *
+     * The fallback keeps runPython() safe if
+     * someone runs code before initialization.
+     */
+    configureOutput(
+        instance,
+    );
 
     /* ---------------------------------------------------------------------- */
     /* Configure interrupt                                                    */
@@ -498,24 +534,35 @@ async function runPython(
 /* -------------------------------------------------------------------------- */
 
 self.onmessage = async (
-    event: MessageEvent<RunMessage>,
+    event: MessageEvent<WorkerMessage>,
 ) => {
     const data =
         event.data;
 
-    if (
-        !data ||
-        data.type !== "run"
-    ) {
+    if (!data) {
         return;
     }
 
     try {
-        await runPython(
-            data.code,
-            data.stdinBuffer,
-            data.interruptBuffer,
-        );
+        if (
+            data.type ===
+            "initialize"
+        ) {
+            await initializePython();
+
+            return;
+        }
+
+        if (
+            data.type ===
+            "run"
+        ) {
+            await runPython(
+                data.code,
+                data.stdinBuffer,
+                data.interruptBuffer,
+            );
+        }
     } catch (error) {
         send({
             type: "error",

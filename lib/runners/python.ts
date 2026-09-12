@@ -8,6 +8,12 @@ let pythonWorker: Worker | null = null;
 
 let runActive = false;
 
+let pythonInitialized = false;
+
+let pythonInitializing:
+    Promise<void> | null =
+    null;
+
 /* -------------------------------------------------------------------------- */
 /* Terminal text                                                              */
 /* -------------------------------------------------------------------------- */
@@ -199,7 +205,6 @@ function interruptPython(): void {
 
     /*
      * Send SIGINT (2) to Pyodide.
-     * This is the actual keyboard interrupt.
      */
     if (interruptState) {
         Atomics.store(
@@ -224,6 +229,9 @@ function destroyWorker(): void {
     }
 
     runActive = false;
+
+    pythonInitialized = false;
+    pythonInitializing = null;
 
     stdinBuffer = null;
     stdinState = null;
@@ -364,6 +372,32 @@ function createWorker(): Worker {
                     ),
                     "90",
                 );
+
+                break;
+            }
+
+            /* ---------------------------------------------------------------- */
+            /* Initialized                                                       */
+            /* ---------------------------------------------------------------- */
+
+            case "initialized": {
+                pythonInitialized =
+                    true;
+
+                if (
+                    pythonInitializing
+                ) {
+                    const resolve =
+                        pythonInitializing;
+
+                    pythonInitializing =
+                        null;
+
+                    /*
+                     * The promise itself is resolved
+                     * by the separate resolver below.
+                     */
+                }
 
                 break;
             }
@@ -552,6 +586,9 @@ function createWorker(): Worker {
         pythonWorker = null;
         runActive = false;
 
+        pythonInitialized = false;
+        pythonInitializing = null;
+
         stdinBuffer = null;
         stdinState = null;
         stdinBytes = null;
@@ -564,6 +601,92 @@ function createWorker(): Worker {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Initialize Python                                                          */
+/* -------------------------------------------------------------------------- */
+
+export function initializePython(): Promise<void> {
+    if (pythonInitialized) {
+        return Promise.resolve();
+    }
+
+    if (pythonInitializing) {
+        return pythonInitializing;
+    }
+
+    const worker =
+        createWorker();
+
+    pythonInitializing =
+        new Promise<void>(
+            (resolve, reject) => {
+                const handleMessage =
+                    (
+                        event: MessageEvent,
+                    ) => {
+                        if (
+                            worker !==
+                            pythonWorker
+                        ) {
+                            return;
+                        }
+
+                        if (
+                            event.data?.type ===
+                            "initialized"
+                        ) {
+                            worker.removeEventListener(
+                                "message",
+                                handleMessage,
+                            );
+
+                            pythonInitialized =
+                                true;
+
+                            pythonInitializing =
+                                null;
+
+                            resolve();
+                        }
+
+                        if (
+                            event.data?.type ===
+                            "error"
+                        ) {
+                            worker.removeEventListener(
+                                "message",
+                                handleMessage,
+                            );
+
+                            pythonInitializing =
+                                null;
+
+                            reject(
+                                new Error(
+                                    String(
+                                        event.data
+                                            ?.message ??
+                                        "Python initialization failed.",
+                                    ),
+                                ),
+                            );
+                        }
+                    };
+
+                worker.addEventListener(
+                    "message",
+                    handleMessage,
+                );
+
+                worker.postMessage({
+                    type: "initialize",
+                });
+            },
+        );
+
+    return pythonInitializing;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Run Python                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -573,18 +696,10 @@ export async function runPython(
     /*
      * If a program is already running,
      * interrupt it first.
-     *
-     * The interrupt must happen before
-     * waiting for the old execution to finish,
-     * otherwise infinite loops cannot be stopped.
      */
     if (runActive) {
         interruptPython();
 
-        /*
-         * Show that the previous execution
-         * has been stopped.
-         */
         runtime.writeOut(
             terminalText(
                 "\n[System] Program Finished\n",
@@ -592,11 +707,6 @@ export async function runPython(
             "90",
         );
 
-        /*
-         * Wait until the old execution has
-         * completely unwound before starting
-         * the new one.
-         */
         await new Promise<void>(
             (resolve) => {
                 const check =
@@ -616,6 +726,20 @@ export async function runPython(
                 check();
             },
         );
+    }
+
+    /*
+     * If the runtime is currently being
+     * preloaded, wait for Pyodide to finish.
+     */
+    if (
+        pythonInitializing
+    ) {
+        try {
+            await pythonInitializing;
+        } catch {
+            return;
+        }
     }
 
     runtime.open(
